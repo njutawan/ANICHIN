@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900" viewBox="0 0 600 900">
+  <defs>
+    <linearGradient id="bg-cherry-blossom" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9d174d"/>
+      <stop offset="100%" stop-color="#1a0a12"/>
+    </linearGradient>
+    <radialGradient id="glow-cherry-blossom" cx="50%" cy="35%" r="60%">
+      <stop offset="0%" stop-color="#f472b6" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#f472b6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="fade-cherry-blossom" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a0a12" stop-opacity="0"/>
+      <stop offset="60%" stop-color="#1a0a12" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#1a0a12" stop-opacity="1"/>
+    </linearGradient>
+    <filter id="blur-cherry-blossom"><feGaussianBlur stdDeviation="3"/></filter>
+  </defs>
+  <rect width="600" height="900" fill="url(#bg-cherry-blossom)"/>
+  <rect width="600" height="900" fill="url(#glow-cherry-blossom)"/>
+  <g transform="translate(150 0)">
+      <g opacity="0.9">
+        <g transform="translate(30,60) rotate(0)"><path d="M 0 -8 C 4 -8 8 -4 8 0 C 8 4 4 8 0 8 C -4 8 -8 4 -8 0 C -8 -4 -4 -8 0 -8 Z" fill="#f472b6" opacity="0.3"/></g><g transform="translate(67,113) rotate(30)"><path d="M 0 -8 C 4 -8 8 -4 8 0 C 8 4 4 8 0 8 C -4 8 -8 4 -8 0 C -8 -4 -4 -8 0 -8 Z" fill="#f472b6" opacity="0.4"/></g><g transform="translate(104,166) rotate(60)"><path d="M 0 -8 C 4 -8 8 -4 8 0 C 8 4 4 8 0 8 C -4 8 -8 4 -8 0 C -8 -4 -4 -8 0 -8 Z" fill="#f472b6" opacity="0.5"/></g><g transform="translate(141,219) rotate(90)"><path d="M 0 -8 C 4 -8 8 -4 8 0 C 8 4 4 8 0 8 C -4 8 -8 4 -8 0 C -8 -4 -4 -8 0 -8 Z" fill="#f472b6" opacity="0.6000000000000001"/></g><g transform="translate(178,272) rotate(120)"><path d="M 0 -8 C 4 -8 8 -4 8 0 C 8 4 4 8 0 8 C -4 8 -8 4 -8 0 C -8 -4 -4 -8 0 -8 Z" fill="#f472b6" opacity="0.3"/></g><g transform="translate(215,325) rotate(150)"><path d="M 0 -8 C 4 -8 8 -4 8 0 C 8 4 4 8 0 8 C -4 8 -8 4 -8 0 C -8 -4 -4 -8 0 -8 Z" fill="#f472b6" opacity="0.4"/></g><g transform="translate(252,378) rotate(180)"><path d="M 0 -8 C 4 -8 8 -4 8 0 C 8 4 4 8 0 8 C -4 8 -8 4 -8 0 C -8 -4 -4 -8 0 -8 Z" fill="#f472b6" opacity="0.5"/></g><g transform="translate(49,111) rotate(210)"><path d="M 0 -8 C 4 -8 8 -4 8 0 C 8 4 4 8 0 8 C -4 8 -8 4 -8 0 C -8 -4 -4 -8 0 -8 Z" fill="#f472b6" opacity="0.6000000000000001"/></g><g transform="translate(86,164) rotate(240)"><path d="M 0 -8 C 4 -8 8 -4 8 0 C 8 4 4 8 0 8 C -4 8 -8 4 -8 0 C -8 -4 -4 -8 0 -8 Z" fill="#f472b6" opacity="0.3"/></g><g transform="translate(123,217) rotate(270)"><path d="M 0 -8 C 4 -8 8 -4 8 0 C 8 4 4 8 0 8 C -4 8 -8 4 -8 0 C -8 -4 -4 -8 0 -8 Z" fill="#f472b6" opacity="0.4"/></g><g transform="translate(160,270) rotate(300)"><path d="M 0 -8 C 4 -8 8 -4 8 0 C 8 4 4 8 0 8 C -4 8 -8 4 -8 0 C -8 -4 -4 -8 0 -8 Z" fill="#f472b6" opacity="0.5"/></g><g transform="translate(197,323) rotate(330)"><path d="M 0 -8 C 4 -8 8 -4 8 0 C 8 4 4 8 0 8 C -4 8 -8 4 -8 0 C -8 -4 -4 -8 0 -8 Z" fill="#f472b6" opacity="0.6000000000000001"/></g><g transform="translate(234,376) rotate(360)"><path d="M 0 -8 C 4 -8 8 -4 8 0 C 8 4 4 8 0 8 C -4 8 -8 4 -8 0 C -8 -4 -4 -8 0 -8 Z" fill="#f472b6" opacity="0.3"/></g><g transform="translate(31,109) rotate(390)"><path d="M 0 -8 C 4 -8 8 -4 8 0 C 8 4 4 8 0 8 C -4 8 -8 4 -8 0 C -8 -4 -4 -8 0 -8 Z" fill="#f472b6" opacity="0.4"/></g>
+      </g></g>
+  <g opacity="0.5">
+    <circle cx="0" cy="0" r="1" fill="#f472b6" opacity="0.4"/><circle cx="73" cy="113" r="2" fill="#f472b6" opacity="0.4"/><circle cx="146" cy="226" r="3" fill="#f472b6" opacity="0.4"/><circle cx="219" cy="339" r="1" fill="#f472b6" opacity="0.4"/><circle cx="292" cy="452" r="2" fill="#f472b6" opacity="0.4"/><circle cx="365" cy="565" r="3" fill="#f472b6" opacity="0.4"/><circle cx="438" cy="678" r="1" fill="#f472b6" opacity="0.4"/><circle cx="511" cy="791" r="2" fill="#f472b6" opacity="0.4"/>
+  </g>
+  <rect width="600" height="900" fill="url(#fade-cherry-blossom)"/>
+  <g transform="translate(40 640)">
+    <rect x="-8" y="-30" width="4" height="40" fill="#f472b6"/>
+    <text x="6" y="-4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700" fill="#f472b6" letter-spacing="3">TV</text>
+    <text x="0" y="40" font-family="ui-sans-serif, system-ui, sans-serif" font-size="38" font-weight="800" fill="#ffffff">CHERRY BLOSSOM ROM</text>
+    <text x="0" y="78" font-family="ui-sans-serif, system-ui, sans-serif" font-size="38" font-weight="800" fill="#ffffff">ANCE</text>
+    <text x="0" y="112" font-family="ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="400" fill="#f472b6" opacity="0.9">桜の恋</text>
+    <text x="0" y="145" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="400" fill="#cbd5e1" opacity="0.7" letter-spacing="1">ORIGINAL ANIME SERIES</text>
+  </g>
+  <rect x="0" y="0" width="600" height="900" fill="none" stroke="#f472b6" stroke-width="1" opacity="0.15"/>
+</svg>
