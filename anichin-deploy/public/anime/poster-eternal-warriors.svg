@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900" viewBox="0 0 600 900">
+  <defs>
+    <linearGradient id="bg-eternal-warriors" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#713f12"/>
+      <stop offset="100%" stop-color="#1a0f04"/>
+    </linearGradient>
+    <radialGradient id="glow-eternal-warriors" cx="50%" cy="35%" r="60%">
+      <stop offset="0%" stop-color="#d97706" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#d97706" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="fade-eternal-warriors" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a0f04" stop-opacity="0"/>
+      <stop offset="60%" stop-color="#1a0f04" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#1a0f04" stop-opacity="1"/>
+    </linearGradient>
+    <filter id="blur-eternal-warriors"><feGaussianBlur stdDeviation="3"/></filter>
+  </defs>
+  <rect width="600" height="900" fill="url(#bg-eternal-warriors)"/>
+  <rect width="600" height="900" fill="url(#glow-eternal-warriors)"/>
+  <g transform="translate(150 0)">
+      <g opacity="0.85">
+        <path d="M 150 180 L 120 260 L 150 240 L 180 260 Z" fill="#d97706" opacity="0.3"/>
+        <rect x="140" y="160" width="20" height="30" fill="#d97706" opacity="0.5"/>
+        <path d="M 100 320 L 200 320" stroke="#d97706" stroke-width="2" opacity="0.4"/>
+      </g></g>
+  <g opacity="0.5">
+    <circle cx="0" cy="0" r="1" fill="#d97706" opacity="0.4"/><circle cx="73" cy="113" r="2" fill="#d97706" opacity="0.4"/><circle cx="146" cy="226" r="3" fill="#d97706" opacity="0.4"/><circle cx="219" cy="339" r="1" fill="#d97706" opacity="0.4"/><circle cx="292" cy="452" r="2" fill="#d97706" opacity="0.4"/><circle cx="365" cy="565" r="3" fill="#d97706" opacity="0.4"/><circle cx="438" cy="678" r="1" fill="#d97706" opacity="0.4"/><circle cx="511" cy="791" r="2" fill="#d97706" opacity="0.4"/>
+  </g>
+  <rect width="600" height="900" fill="url(#fade-eternal-warriors)"/>
+  <g transform="translate(40 640)">
+    <rect x="-8" y="-30" width="4" height="40" fill="#d97706"/>
+    <text x="6" y="-4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700" fill="#d97706" letter-spacing="3">TV</text>
+    <text x="0" y="40" font-family="ui-sans-serif, system-ui, sans-serif" font-size="38" font-weight="800" fill="#ffffff">ETERNAL WARRIORS</text>
+    
+    <text x="0" y="78" font-family="ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="400" fill="#d97706" opacity="0.9">永遠の戦士</text>
+    <text x="0" y="108" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="400" fill="#cbd5e1" opacity="0.7" letter-spacing="1">ORIGINAL ANIME SERIES</text>
+  </g>
+  <rect x="0" y="0" width="600" height="900" fill="none" stroke="#d97706" stroke-width="1" opacity="0.15"/>
+</svg>

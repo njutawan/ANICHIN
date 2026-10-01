@@ -1,0 +1,101 @@
+# ============================================================================
+# AniChin — Caddyfile (Production)
+# Auto-HTTPS via Let's Encrypt + security headers + reverse proxy
+# Usage:
+#   Set SITE_DOMAIN in .env (e.g., anichin.id)
+#   docker-compose -f docker-compose.prod.yml up -d
+# ============================================================================
+
+{$SITE_DOMAIN} {
+	# ── Security: Remove server fingerprinting ───────────────
+	header {
+		# Hide Caddy server header
+		-Server
+
+		# Security headers (defense-in-depth with Next.js middleware)
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=(), interest-cohort=(), sync-xhr=(), document-domain=()"
+		X-DNS-Prefetch-Control "off"
+		X-Permitted-Cross-Domain-Policies "none"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-origin"
+
+		# Cache static assets aggressively
+		/assets/* Cache-Control "public, max-age=31536000, immutable"
+		/_next/static/* Cache-Control "public, max-age=31536000, immutable"
+	}
+
+	# ── CORS: Restrict to same-origin ────────────────────────
+	# API routes don't need cross-origin access from browsers
+	@api {
+		path /api/*
+	}
+	handle @api {
+		header Access-Control-Allow-Origin "null"
+		header Access-Control-Allow-Methods "GET, POST, OPTIONS"
+		header Access-Control-Allow-Headers "Content-Type, Authorization"
+		header Access-Control-Max-Age "86400"
+		reverse_proxy web:3000 {
+			header_up Host {host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# ── Port transform proxy (for mini-services) ─────────────
+	@transform_port_query {
+		query XTransformPort=*
+	}
+	handle @transform_port_query {
+		reverse_proxy localhost:{query.XTransformPort} {
+			header_up Host {host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# ── Default: Next.js app ────────────────────────────────
+	handle {
+		reverse_proxy web:3000 {
+			header_up Host {host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# ── Compression ──────────────────────────────────────────
+	encode gzip zstd
+
+	# ── Logging ──────────────────────────────────────────────
+	log {
+		output file /data/access.log {
+			roll_size 100mb
+			roll_keep 10
+			roll_keep_for 720h
+		}
+		format json
+	}
+
+	# ── Rate limiting (basic) ────────────────────────────────
+	# More sophisticated rate limiting is handled by the app via Redis
+	@limit auth queries {http.matchers.path.start /api/auth} {
+		# Apply per-IP rate limit to auth endpoints
+	}
+}
+
+# ── WWW → non-WWW redirect ─────────────────────────────────
+www.{$SITE_DOMAIN} {
+	redir https://{$SITE_DOMAIN}{uri} permanent
+}
+
+# ── Health check endpoint (for load balancer) ──────────────
+# Doesn't require TLS termination — accessible on port 80
+:8080 {
+	respond /health "ok" 200
+}

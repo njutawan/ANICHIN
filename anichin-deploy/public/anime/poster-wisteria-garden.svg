@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900" viewBox="0 0 600 900">
+  <defs>
+    <linearGradient id="bg-wisteria-garden" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#6b21a8"/>
+      <stop offset="100%" stop-color="#0a0a14"/>
+    </linearGradient>
+    <radialGradient id="glow-wisteria-garden" cx="50%" cy="35%" r="60%">
+      <stop offset="0%" stop-color="#c084fc" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#c084fc" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="fade-wisteria-garden" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0a0a14" stop-opacity="0"/>
+      <stop offset="60%" stop-color="#0a0a14" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#0a0a14" stop-opacity="1"/>
+    </linearGradient>
+    <filter id="blur-wisteria-garden"><feGaussianBlur stdDeviation="3"/></filter>
+  </defs>
+  <rect width="600" height="900" fill="url(#bg-wisteria-garden)"/>
+  <rect width="600" height="900" fill="url(#glow-wisteria-garden)"/>
+  <g transform="translate(150 0)">
+      <g opacity="0.85">
+        <path d="M 60 360 Q 70 280 80 200" fill="none" stroke="#c084fc" stroke-width="2" opacity="0.4"/><path d="M 100 360 Q 110 280 120 200" fill="none" stroke="#c084fc" stroke-width="2" opacity="0.5"/><path d="M 140 360 Q 150 280 160 200" fill="none" stroke="#c084fc" stroke-width="2" opacity="0.6000000000000001"/><path d="M 180 360 Q 190 280 200 200" fill="none" stroke="#c084fc" stroke-width="2" opacity="0.7000000000000001"/><path d="M 220 360 Q 230 280 240 200" fill="none" stroke="#c084fc" stroke-width="2" opacity="0.8"/>
+        <circle cx="80" cy="200" r="6" fill="#c084fc" opacity="0.6"/><circle cx="120" cy="200" r="6" fill="#c084fc" opacity="0.6"/><circle cx="160" cy="200" r="6" fill="#c084fc" opacity="0.6"/><circle cx="200" cy="200" r="6" fill="#c084fc" opacity="0.6"/><circle cx="240" cy="200" r="6" fill="#c084fc" opacity="0.6"/>
+      </g></g>
+  <g opacity="0.5">
+    <circle cx="0" cy="0" r="1" fill="#c084fc" opacity="0.4"/><circle cx="73" cy="113" r="2" fill="#c084fc" opacity="0.4"/><circle cx="146" cy="226" r="3" fill="#c084fc" opacity="0.4"/><circle cx="219" cy="339" r="1" fill="#c084fc" opacity="0.4"/><circle cx="292" cy="452" r="2" fill="#c084fc" opacity="0.4"/><circle cx="365" cy="565" r="3" fill="#c084fc" opacity="0.4"/><circle cx="438" cy="678" r="1" fill="#c084fc" opacity="0.4"/><circle cx="511" cy="791" r="2" fill="#c084fc" opacity="0.4"/>
+  </g>
+  <rect width="600" height="900" fill="url(#fade-wisteria-garden)"/>
+  <g transform="translate(40 640)">
+    <rect x="-8" y="-30" width="4" height="40" fill="#c084fc"/>
+    <text x="6" y="-4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700" fill="#c084fc" letter-spacing="3">TV</text>
+    <text x="0" y="40" font-family="ui-sans-serif, system-ui, sans-serif" font-size="38" font-weight="800" fill="#ffffff">WISTERIA GARDEN</text>
+    
+    <text x="0" y="78" font-family="ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="400" fill="#c084fc" opacity="0.9">藤の庭</text>
+    <text x="0" y="108" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="400" fill="#cbd5e1" opacity="0.7" letter-spacing="1">ORIGINAL ANIME SERIES</text>
+  </g>
+  <rect x="0" y="0" width="600" height="900" fill="none" stroke="#c084fc" stroke-width="1" opacity="0.15"/>
+</svg>

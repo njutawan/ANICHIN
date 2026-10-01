@@ -1,0 +1,84 @@
+# ============================================================================
+# AniChin — Docker Compose (Staging)
+# Lightweight setup — no caddy, no backup-cron, no PG tuning
+# Use for testing deploy before going to production
+# ============================================================================
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: anichin-staging-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=anichin_staging
+      - POSTGRES_USER=anichin_staging
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-staging-password-change-me}
+    ports:
+      - "127.0.0.1:5433:5432"  # Different port from prod
+    volumes:
+      - staging_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anichin_staging"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: anichin-staging-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6380:6379"
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+    container_name: anichin-staging-migrate
+    restart: "no"
+    command: ["bunx", "prisma", "migrate", "deploy"]
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://anichin_staging:${POSTGRES_PASSWORD:-staging-password-change-me}@db:5432/anichin_staging?schema=public
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+    container_name: anichin-staging-web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3001:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://anichin_staging:${POSTGRES_PASSWORD:-staging-password-change-me}@db:5432/anichin_staging?schema=public
+      - REDIS_URL=redis://redis:6379
+      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3001}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-staging-secret-not-for-production-32-chars}
+      - NEXT_TELEMETRY_DISABLED=1
+      - HOSTNAME=0.0.0.0
+      - PORT=3000
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  staging_db_data:
+    driver: local
+
+networks:
+  default:
+    name: anichin-staging-network
