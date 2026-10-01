@@ -82,7 +82,6 @@ function resolveSecret(): string {
         'NEXTAUTH_SECRET missing for non-localhost host. Set the env var before running.'
       );
     }
-    // eslint-disable-next-line no-console
     console.warn('[auth] WARNING: Using insecure dev-only NEXTAUTH_SECRET fallback. Set NEXTAUTH_SECRET env var for production.');
     return 'anichin-dev-secret-change-in-production-' + Math.random().toString(36).slice(2);
   }

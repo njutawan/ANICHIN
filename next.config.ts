@@ -29,7 +29,6 @@ const nextConfig: NextConfig = {
       '@radix-ui/react-popover',
       '@radix-ui/react-scroll-area',
       '@radix-ui/react-separator',
-      '@radix-ui/react-sheet',
       '@radix-ui/react-tabs',
       '@radix-ui/react-tooltip',
     ],
@@ -39,7 +38,7 @@ const nextConfig: NextConfig = {
     formats: ['image/avif', 'image/webp'],
     remotePatterns: [{ protocol: 'https', hostname: '**' }],
     minimumCacheTTL: 3600,
-    // Performance: reduce device sizes (smaller images)
+    // Perf: limit generated widths so we never emit oversized variants
     deviceSizes: [640, 750, 828, 1080, 1200, 1920],
     imageSizes: [16, 32, 48, 64, 96, 128, 256, 384],
   },

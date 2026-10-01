@@ -125,7 +125,6 @@ function log(entry: Omit<LogEntry, 'timestamp'>) {
   } else if (process.env.NODE_ENV !== 'production' || isVercel) {
     // Log info-level too on Vercel (free log search) + dev
     if (entry.level === 'info') {
-      // eslint-disable-next-line no-console
       console.log(JSON.stringify(fullEntry));
     }
   }

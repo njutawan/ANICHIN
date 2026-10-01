@@ -25,12 +25,10 @@ import crypto from "crypto";
  *  - Token is consumed in the same tx as user.emailVerified update — no race.
  */
 
-import { logger } from '@/lib/logger';
 import crypto from 'crypto';
 import { db } from '@/lib/db';
 
 const TOKEN_TTL_HOURS = 24;
-const TOKEN_BYTES = 32; // 32 bytes → 64 hex chars → 256-bit entropy
 
 // ---------------------------------------------------------------------------
 // Token primitives
