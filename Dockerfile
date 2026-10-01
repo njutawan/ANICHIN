@@ -35,8 +35,13 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
-# Database is always PostgreSQL in production
+# Database is always PostgreSQL in production. The URL is only needed by
+# `prisma generate` (which never connects) — `next build` no longer touches the
+# DB because every page is rendered per-request (see `dynamic` in the root
+# layout), so the image can be built without a reachable database.
 ARG DATABASE_URL="postgresql://anichin:anichin@db:5432/anichin?schema=public"
+# Informational: kept in sync with docker-compose/CI build args.
+ARG DATABASE_PROVIDER=postgresql
 
 # Generate Prisma client (must run BEFORE next build)
 RUN bunx prisma generate
@@ -50,7 +55,25 @@ ENV DEPLOY_TARGET=standalone
 RUN bun run build
 
 # ----------------------------------------------------------------------------
-# Stage 3: runner  — minimal production image
+# Stage 3: migrate — one-shot Prisma CLI image (docker-compose `migrate`)
+#
+# Why a separate stage: the runner image (node:20-alpine) has neither `bunx`
+# nor the Prisma CLI/engines, so `bunx prisma migrate deploy` could never run
+# there — and because `web` has `depends_on: migrate: service_completed_
+# successfully`, the whole stack failed to start. This stage reuses everything
+# the builder already installed.
+# NOTE: keep this stage BEFORE `runner` so the default build target stays the
+# slim runtime image.
+# ----------------------------------------------------------------------------
+FROM builder AS migrate
+
+WORKDIR /app
+ENV NODE_ENV=production
+
+CMD ["bunx", "prisma", "migrate", "deploy"]
+
+# ----------------------------------------------------------------------------
+# Stage 4: runner  — minimal production image
 # ----------------------------------------------------------------------------
 FROM node:20-alpine AS runner
 
@@ -92,8 +115,10 @@ USER nextjs
 EXPOSE 3000
 
 # Healthcheck — poll the lightweight /api health endpoint
-HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
-  CMD wget -qO- http://localhost:3000/api > /dev/null 2>&1 || exit 1
+# Poll the real health endpoint (it verifies the DB + memory + Redis), so a
+# container with a dead database is reported unhealthy instead of green.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD wget -qO- http://localhost:3000/api/health > /dev/null 2>&1 || exit 1
 
 # Next.js standalone server.js (runs on Node.js runtime)
 CMD ["node", "server.js"]

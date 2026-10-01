@@ -34,7 +34,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Build the `migrate` stage: it has bun + the Prisma CLI/engines.
+      # (The runtime stage has no `bunx`, so the old command always failed.)
+      target: migrate
       args:
+        DATABASE_PROVIDER: postgresql
     container_name: anichin-staging-migrate
     restart: "no"
     command: ["bunx", "prisma", "migrate", "deploy"]
@@ -49,7 +53,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: runner
       args:
+        DATABASE_PROVIDER: postgresql
     container_name: anichin-staging-web
     restart: unless-stopped
     ports:
