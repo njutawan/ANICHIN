@@ -251,7 +251,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [build, test]
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    # Verify the secret-free Docker build on PRs too, before changes reach main.
     steps:
       - uses: actions/checkout@v4
 
@@ -272,6 +272,8 @@ jobs:
           context: .
           file: ./Dockerfile
           push: false
+          # The next step runs this image; Buildx otherwise only caches it.
+          load: true
           tags: anichin:ci-${{ github.sha }}
           build-args: |
             DATABASE_PROVIDER=postgresql

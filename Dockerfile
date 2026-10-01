@@ -39,6 +39,9 @@ ENV NODE_ENV=production
 # `prisma generate` (which never connects) — `next build` no longer touches the
 # DB because every page is rendered per-request (see `dynamic` in the root
 # layout), so the image can be built without a reachable database.
+# Auth secrets are runtime-only too: src/lib/auth.ts validates NEXTAUTH_SECRET
+# when authentication is used, not when Next.js imports routes during build.
+# Never pass NEXTAUTH_SECRET or OAuth credentials as build args.
 ARG DATABASE_URL="postgresql://anichin:anichin@db:5432/anichin?schema=public"
 # Informational: kept in sync with docker-compose/CI build args.
 ARG DATABASE_PROVIDER=postgresql

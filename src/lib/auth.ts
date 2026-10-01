@@ -67,6 +67,9 @@ function isValidEmail(email: string): boolean {
 }
 
 // --- Resolve NEXTAUTH_SECRET (throw in production if missing) ---
+// Cache only after first use, so the dev-only random fallback stays stable.
+let resolvedSecret: string | undefined;
+
 function resolveSecret(): string {
   const secret = process.env.NEXTAUTH_SECRET;
   if (!secret) {
@@ -364,7 +367,12 @@ export const authOptions: NextAuthOptions = {
       return baseUrl;
     },
   },
-  secret: resolveSecret(),
+  // Next.js imports routes while collecting page data, without runtime secrets.
+  // NextAuth reads this property when handling a request (or a server session),
+  // so production validation still applies without baking secrets into images.
+  get secret(): string {
+    return resolvedSecret ??= resolveSecret();
+  },
   // Don't leak error details to client
   logger: {
     error(error) {
