@@ -33,9 +33,8 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Generate Prisma client (PostgreSQL)
-        run: |
-          cp prisma/schema.prod.prisma prisma/schema.prisma
-          bun run db:generate
+        # schema.prisma is already provider="postgresql" — no swap needed.
+        run: bun run db:generate
         env:
           DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
 

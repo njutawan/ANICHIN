@@ -15,7 +15,7 @@
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
     "seed": "bun run scripts/seed.ts",
-    "db:migrate:prod": "cp prisma/schema.prod.prisma prisma/schema.prisma && prisma generate && prisma migrate deploy && git checkout prisma/schema.prisma",
+    "db:migrate:prod": "prisma generate && prisma migrate deploy",
     "db:migrate:dev": "prisma migrate dev --name init",
     "db:migrate:status": "prisma migrate status",
     "setup-env": "bash scripts/setup-env.sh",
