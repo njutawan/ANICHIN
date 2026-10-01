@@ -20,6 +20,20 @@ const geistMono = Geist_Mono({
 
 const SITE_URL = "https://anichin.id";
 
+/**
+ * Every route is rendered per-request.
+ *
+ * Two reasons (both verified against Next 16):
+ * 1. CSP: `src/proxy.ts` issues a per-request nonce. Nonces can only be
+ *    injected into HTML that is rendered per-request — a prerendered page is
+ *    generated once at build time, never gets a nonce, and `'strict-dynamic'`
+ *    then blocks every script in production (page renders but never hydrates).
+ * 2. Build isolation: the home/en/ja pages query PostgreSQL through server
+ *    components. Prerendering them would require a reachable database during
+ *    `next build` (which the Dockerfile/CI build stages do not have).
+ */
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
