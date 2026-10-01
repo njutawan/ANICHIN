@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900" viewBox="0 0 600 900">
+  <defs>
+    <linearGradient id="bg-phantom-detective" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3b3b54"/>
+      <stop offset="100%" stop-color="#0a0a14"/>
+    </linearGradient>
+    <radialGradient id="glow-phantom-detective" cx="50%" cy="35%" r="60%">
+      <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#a78bfa" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="fade-phantom-detective" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0a0a14" stop-opacity="0"/>
+      <stop offset="60%" stop-color="#0a0a14" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#0a0a14" stop-opacity="1"/>
+    </linearGradient>
+    <filter id="blur-phantom-detective"><feGaussianBlur stdDeviation="3"/></filter>
+  </defs>
+  <rect width="600" height="900" fill="url(#bg-phantom-detective)"/>
+  <rect width="600" height="900" fill="url(#glow-phantom-detective)"/>
+  <g transform="translate(150 0)">
+      <g opacity="0.85">
+        <circle cx="150" cy="220" r="60" fill="none" stroke="#a78bfa" stroke-width="2" opacity="0.4"/>
+        <circle cx="150" cy="220" r="40" fill="none" stroke="#a78bfa" stroke-width="1.5" opacity="0.3"/>
+        <circle cx="150" cy="220" r="20" fill="#a78bfa" opacity="0.3"/>
+        <path d="M 90 280 L 210 280" stroke="#a78bfa" stroke-width="1" opacity="0.3"/>
+      </g></g>
+  <g opacity="0.5">
+    <circle cx="0" cy="0" r="1" fill="#a78bfa" opacity="0.4"/><circle cx="73" cy="113" r="2" fill="#a78bfa" opacity="0.4"/><circle cx="146" cy="226" r="3" fill="#a78bfa" opacity="0.4"/><circle cx="219" cy="339" r="1" fill="#a78bfa" opacity="0.4"/><circle cx="292" cy="452" r="2" fill="#a78bfa" opacity="0.4"/><circle cx="365" cy="565" r="3" fill="#a78bfa" opacity="0.4"/><circle cx="438" cy="678" r="1" fill="#a78bfa" opacity="0.4"/><circle cx="511" cy="791" r="2" fill="#a78bfa" opacity="0.4"/>
+  </g>
+  <rect width="600" height="900" fill="url(#fade-phantom-detective)"/>
+  <g transform="translate(40 640)">
+    <rect x="-8" y="-30" width="4" height="40" fill="#a78bfa"/>
+    <text x="6" y="-4" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700" fill="#a78bfa" letter-spacing="3">TV</text>
+    <text x="0" y="40" font-family="ui-sans-serif, system-ui, sans-serif" font-size="38" font-weight="800" fill="#ffffff">PHANTOM DETECTIVE</text>
+    
+    <text x="0" y="78" font-family="ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="400" fill="#a78bfa" opacity="0.9">幻の探偵</text>
+    <text x="0" y="108" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="400" fill="#cbd5e1" opacity="0.7" letter-spacing="1">ORIGINAL ANIME SERIES</text>
+  </g>
+  <rect x="0" y="0" width="600" height="900" fill="none" stroke="#a78bfa" stroke-width="1" opacity="0.15"/>
+</svg>

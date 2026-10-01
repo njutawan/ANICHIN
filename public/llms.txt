@@ -1,0 +1,61 @@
+# AniChin — Nonton Anime Subtitle Indonesia Terlengkap
+
+> AniChin adalah situs nonton dan download anime subtitle Indonesia terlengkap.
+> Streaming anime terbaru, movie, dan ongoing dengan kualitas HD 1080p gratis.
+
+## About
+AniChin provides anime streaming and download services with Indonesian subtitles.
+The platform offers HD 1080p quality, daily episode updates, and a comprehensive
+anime catalog including TV series, movies, OVAs, and ONAs.
+
+## Key Features
+- Streaming anime sub Indo HD 1080p gratis
+- Update episode terbaru setiap hari
+- Katalog anime lengkap (TV, Movie, OVA, ONA)
+- Schedule rilis harian
+- Bookmark dan continue watching
+- User reviews dan ratings
+- Search dengan filter advanced
+- PWA (bisa di-install di HP)
+- Dark mode support
+- Multi-language (ID + EN)
+
+## Content
+- 60+ anime titles (real data from AniList)
+- 453+ episodes with streaming URLs
+- 17 genres
+- User reviews and ratings (1-10 scale)
+- Weekly release schedule
+- Collections and recommendations
+
+## Technical
+- Built with Next.js 16, TypeScript, PostgreSQL
+- Schema.org structured data (TVSeries, AggregateRating, Review, FAQPage, BreadcrumbList)
+- OpenGraph + Twitter Card metadata
+- PWA (service worker, offline support)
+- Accessibility: WCAG AA compliant
+- Performance: FCP < 1s, TTFB < 300ms
+
+## Pages
+- Homepage: https://anichin.id
+- Anime List: https://anichin.id/#list
+- Schedule: https://anichin.id/#schedule
+- Genres: https://anichin.id/#genres
+- Login: https://anichin.id/auth/login
+- Register: https://anichin.id/auth/register
+
+## API (for AI consumption)
+- Health: https://anichin.id/api/health
+- Stats: https://anichin.id/api/stats
+- Anime list: https://anichin.id/api/anime
+- Anime detail: https://anichin.id/api/anime/[slug]
+- JSON-LD per anime: https://anichin.id/api/anime/[slug]/jsonld
+- OG metadata per anime: https://anichin.id/api/anime/[slug]/og
+- Search: https://anichin.id/api/search?q=...
+- Genres: https://anichin.id/api/genres
+- Sitemap: https://anichin.id/sitemap.xml
+- Robots: https://anichin.id/robots.txt
+
+## Contact
+- Email: noreply@anichin.id
+- Social: @anichin (Twitter, GitHub, Discord)
