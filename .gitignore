@@ -32,6 +32,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# …but the template IS committed (README/docs/compose all reference it).
+# Without this negation `.env.example` was silently ignored and never existed
+# in the repo, so `cp .env.example .env` failed on every fresh clone.
+!.env.example
 
 # vercel
 .vercel
@@ -46,7 +50,10 @@ local-*
 *.log
 dev.log
 dev.out.log
-test
+# NOTE: keep this anchored to the repo root. A bare `test` pattern also matched
+# `src/test/` and silently excluded `src/test/setup.ts` from every commit,
+# which made the whole Vitest suite unrunnable on a fresh clone.
+/test
 prompt
 
 server.log

@@ -1,7 +1,9 @@
 import { db } from '@/lib/db';
 
-export const dynamic = 'force-static';
-export const revalidate = 3600;
+// Sitemap queries PostgreSQL (`db.anime.findMany`), so it must NOT be
+// prerendered at build time (the Docker/CI image build has no database).
+// Generated on demand (crawlers hit it rarely; the CDN/proxy caches it).
+export const dynamic = 'force-dynamic';
 
 export default async function sitemap() {
   const SITE_URL = 'https://anichin.id';

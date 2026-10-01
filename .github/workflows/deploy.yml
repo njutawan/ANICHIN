@@ -139,9 +139,8 @@ jobs:
 
       - name: Generate Prisma client (PostgreSQL)
         if: github.event.inputs.rollback != 'true'
-        run: |
-          cp prisma/schema.prod.prisma prisma/schema.prisma
-          bun run db:generate
+        # schema.prisma is already provider="postgresql" — no swap needed.
+        run: bun run db:generate
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 

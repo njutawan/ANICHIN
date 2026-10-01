@@ -21,7 +21,6 @@ import fs from 'node:fs';
 let Database: any;
 try {
   // Bun ships with bun:sqlite built-in
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore - bun:sqlite is a Bun-only module
   ({ Database } = await import('bun:sqlite'));
 } catch {
@@ -93,7 +92,7 @@ async function migrateTable<T extends Record<string, unknown>>(
         try {
           await prismaDelegate.createMany({ data: [row], skipDuplicates: true });
           totalInserted++;
-        } catch (e) {
+        } catch {
           // Skip individual failures
         }
       }

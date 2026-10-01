@@ -24,8 +24,6 @@ import { useUIStore } from '@/lib/store';
  * - Eye-catching red/amber gradient
  */
 
-type NewsSource = 'latest' | 'trending' | 'random';
-
 interface NewsItem {
   id: string;
   title: string;

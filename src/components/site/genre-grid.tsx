@@ -3,7 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useRef } from 'react';
 import Link from 'next/link';
-import { Flame, ChevronRight, ChevronLeft, TrendingUp, Radio, Star, Clock, Calendar } from 'lucide-react';
+import { Flame, ChevronRight, ChevronLeft, Star, Calendar } from 'lucide-react';
 import { AnimeCard } from './anime-card';
 import { SectionHeading } from './latest-updates';
 import { cn } from '@/lib/utils';

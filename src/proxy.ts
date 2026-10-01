@@ -34,7 +34,14 @@ const TRUSTED_FRAMES = [SELF, 'https://www.youtube.com', 'https://www.youtube-no
 /**
  * Generate a cryptographic nonce for CSP.
  * Uses Web Crypto API (Edge Runtime compatible).
- * Next.js reads the `x-nonce` response header and applies it to its scripts.
+ *
+ * NOTE: Next.js picks up the nonce from the **request** header
+ * `content-security-policy` (see `next/dist/server/app-render/app-render.js`
+ * → `parseRequestHeaders`). `x-nonce` alone is NOT read by Next — it is only
+ * kept for our own server components that want to apply the nonce manually.
+ * Nonces also require dynamic rendering: a statically prerendered page is
+ * built once (at build time) and can never carry a per-request nonce, so all
+ * DB-backed pages opt into `dynamic = 'force-dynamic'` in the root layout.
  */
 function generateNonce(): string {
   const bytes = new Uint8Array(16);
@@ -111,11 +118,20 @@ export async function proxy(request: NextRequest) {
 
   // Generate per-request nonce for CSP
   const nonce = generateNonce();
+  const csp = buildCSP(nonce);
+
+  // Forward the policy + nonce on the REQUEST headers: this is what makes
+  // Next.js add `nonce="…"` to its own inline/bootstrap <script> tags.
+  // (Without this, `'strict-dynamic'` in production blocks every script and
+  // the page renders but never hydrates.)
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set('x-nonce', nonce);
+  requestHeaders.set('Content-Security-Policy', csp);
 
   // Get the response from the route handler
-  const response = NextResponse.next();
+  const response = NextResponse.next({ request: { headers: requestHeaders } });
 
-  // Pass nonce to Next.js (it applies the nonce to its own scripts via this header)
+  // Keep the nonce available to our own server components (e.g. JSON-LD blocks)
   response.headers.set('x-nonce', nonce);
 
   // Apply security headers

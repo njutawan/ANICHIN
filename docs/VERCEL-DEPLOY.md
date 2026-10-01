@@ -246,10 +246,7 @@ npm i -g vercel
 # Pull env vars locally (so prisma can connect)
 vercel env pull .env.local
 
-# Swap Prisma to PostgreSQL schema
-cp prisma/schema.prod.prisma prisma/schema.prisma
-
-# Generate Prisma client
+# Generate Prisma client (schema.prisma sudah PostgreSQL — tidak ada swap)
 bunx prisma generate
 
 # Push schema to database
@@ -257,16 +254,13 @@ bunx prisma db push
 
 # Run seed (creates initial anime data)
 bun run seed
-
-# Restore dev schema (so local dev still works with SQLite)
-git checkout prisma/schema.prisma
 ```
 
 ### Option B: Via Vercel Postgres Console
 
 If using Vercel Postgres, you can run migrations from the dashboard:
 1. Vercel dashboard → Storage → your Postgres → **Query** tab
-2. Paste contents of `prisma/migrations/pg_init/init.sql`
+2. Paste contents of `prisma/migrations/20261001000000_init/migration.sql`
 3. Run
 
 ---

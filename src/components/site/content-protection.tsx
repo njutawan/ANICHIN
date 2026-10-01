@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { Shield, ShieldOff } from 'lucide-react';
-import { useUIStore } from '@/lib/store';
 import { useMounted } from '@/hooks/use-mounted';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';

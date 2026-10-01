@@ -61,11 +61,8 @@ export function SettingsPanel() {
     setAccentColor(color);
     const config = ACCENT_COLORS[color];
     const oklch = ACCENT_OKLCH[color];
-    // eslint-disable-next-line react-hooks/immutability
     document.documentElement.style.setProperty('--brand', `oklch(${oklch})`);
-    // eslint-disable-next-line react-hooks/immutability
     document.documentElement.style.setProperty('--accent', `oklch(${oklch})`);
-    // eslint-disable-next-line react-hooks/immutability
     document.documentElement.style.setProperty('--ring', `oklch(${oklch})`);
     toast.success(`Warna aksen: ${config.label}`);
   };
@@ -73,7 +70,7 @@ export function SettingsPanel() {
   const handleFontChange = (size: 'sm' | 'md' | 'lg') => {
     setFontSize(size);
     const sizeMap: Record<string, string> = { sm: '14px', md: '16px', lg: '18px' };
-    // eslint-disable-next-line react-hooks/immutability
+    // eslint-disable-next-line react-hooks/immutability -- DOM style write is intentional here
     document.documentElement.style.fontSize = sizeMap[size];
     toast.success(`Ukuran font: ${FONT_SIZES[size].label}`);
   };
@@ -84,13 +81,9 @@ export function SettingsPanel() {
     setFontSize('md');
     setCompactMode(false);
     setAutoplayHero(true);
-    // eslint-disable-next-line react-hooks/immutability
     document.documentElement.style.fontSize = '16px';
-    // eslint-disable-next-line react-hooks/immutability
     document.documentElement.style.setProperty('--brand', 'oklch(0.82 0.16 80)');
-    // eslint-disable-next-line react-hooks/immutability
     document.documentElement.style.setProperty('--accent', 'oklch(0.82 0.16 80)');
-    // eslint-disable-next-line react-hooks/immutability
     document.documentElement.style.setProperty('--ring', 'oklch(0.82 0.16 80)');
     toast.success('Pengaturan direset ke default');
   };

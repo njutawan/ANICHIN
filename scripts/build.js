@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* eslint-disable @typescript-eslint/no-require-imports, no-console */
+/* eslint-disable @typescript-eslint/no-require-imports */
 /**
  * AniChin — Universal build script
  * Detects deployment target (Vercel vs Docker/standalone) and runs appropriate build.
@@ -31,7 +31,7 @@ console.log('▶ Step 1: Generating Prisma client...');
 try {
   execSync('bunx prisma generate', { stdio: 'inherit' });
   console.log('✓ Prisma client generated\n');
-} catch (err) {
+} catch {
   console.error('✗ Prisma generate failed');
   process.exit(1);
 }
@@ -41,7 +41,7 @@ console.log('▶ Step 2: Running next build...');
 try {
   execSync('next build', { stdio: 'inherit' });
   console.log('✓ Next.js build complete\n');
-} catch (err) {
+} catch {
   console.error('✗ Next.js build failed');
   process.exit(1);
 }

@@ -2,6 +2,10 @@
 # AniChin — CI Pipeline
 # Triggered on: push (main/develop), PR to main
 # Jobs: quality (lint+type) → build → security scan → test → docker build
+#
+# NOTE: the Prisma schema is provider="postgresql", so every job that talks to
+# the database spins up a real PostgreSQL service (SQLite URLs silently break
+# `prisma generate/push`).
 # ============================================================================
 name: CI
 
@@ -14,6 +18,12 @@ on:
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  # Shared across jobs — service container above.
+  CI_DATABASE_URL: "postgresql://anichin:anichin@localhost:5432/anichin?schema=public"
+  CI_NEXTAUTH_SECRET: "ci-test-secret-not-for-production-32chars"
+  CI_NEXTAUTH_URL: "http://localhost:3000"
 
 jobs:
   # ── Job 1: Quality gates (lint + type-check) ──────────────
@@ -35,7 +45,7 @@ jobs:
           path: |
             node_modules
             .next/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lockb') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-bun-
 
@@ -45,7 +55,7 @@ jobs:
       - name: Generate Prisma client
         run: bun run db:generate
         env:
-          DATABASE_URL: "file:./ci.db"
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
 
       - name: Run ESLint
         run: bun run lint
@@ -59,6 +69,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: quality
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: anichin
+          POSTGRES_PASSWORD: anichin
+          POSTGRES_DB: anichin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U anichin -d anichin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -73,7 +97,7 @@ jobs:
           path: |
             node_modules
             .next/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lockb') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-bun-
 
@@ -83,19 +107,19 @@ jobs:
       - name: Generate Prisma client
         run: bun run db:generate
         env:
-          DATABASE_URL: "file:./ci.db"
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
 
-      - name: Push DB schema (CI SQLite)
+      - name: Push DB schema (CI PostgreSQL)
         run: bun run db:push
         env:
-          DATABASE_URL: "file:./ci.db"
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
 
       - name: Run tests
         run: bun run test
         env:
-          DATABASE_URL: "file:./ci.db"
-          NEXTAUTH_SECRET: "ci-test-secret-not-for-production-32chars"
-          NEXTAUTH_URL: "http://localhost:3000"
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
+          NEXTAUTH_SECRET: ${{ env.CI_NEXTAUTH_SECRET }}
+          NEXTAUTH_URL: ${{ env.CI_NEXTAUTH_URL }}
 
       - name: Upload coverage
         if: always()
@@ -112,6 +136,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: quality
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: anichin
+          POSTGRES_PASSWORD: anichin
+          POSTGRES_DB: anichin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U anichin -d anichin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -126,7 +164,7 @@ jobs:
           path: |
             node_modules
             .next/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lockb') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-bun-
 
@@ -136,27 +174,33 @@ jobs:
       - name: Generate Prisma client
         run: bun run db:generate
         env:
-          DATABASE_URL: "file:./ci.db"
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
 
-      - name: Push DB schema (CI SQLite)
+      - name: Push DB schema (CI PostgreSQL)
         run: bun run db:push
         env:
-          DATABASE_URL: "file:./ci.db"
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
 
       - name: Build Next.js
         run: bun run build
         env:
-          DATABASE_URL: "file:./ci.db"
-          NEXTAUTH_SECRET: "ci-test-secret-not-for-production-32chars"
-          NEXTAUTH_URL: "http://localhost:3000"
+          # Standalone output is required by the smoke test + artifact below.
+          DEPLOY_TARGET: standalone
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
+          NEXTAUTH_SECRET: ${{ env.CI_NEXTAUTH_SECRET }}
+          NEXTAUTH_URL: ${{ env.CI_NEXTAUTH_URL }}
 
       - name: Smoke-test standalone server
+        env:
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
+          NEXTAUTH_SECRET: ${{ env.CI_NEXTAUTH_SECRET }}
+          NEXTAUTH_URL: ${{ env.CI_NEXTAUTH_URL }}
         run: |
           # Start the standalone server in background
           node .next/standalone/server.js &
           SERVER_PID=$!
-          sleep 5
-          # Check it responds
+          sleep 8
+          # Check it responds (health returns 503 unless the DB is reachable)
           curl -sf http://localhost:3000/api/health | grep -q '"status"'
           STATUS=$?
           kill $SERVER_PID 2>/dev/null || true
