@@ -236,8 +236,8 @@ gh secret set NEXTAUTH_SECRET --body "K9x2mP7vQ4wL8nR3tB6yF1hJ5kD0gH9sZ+abc123="
 gh secret set NEXTAUTH_URL --body "https://anichin.id"
 gh secret set GOOGLE_CLIENT_ID --body "123456789012-abcdefghijklmnopqrstuvwxyz.apps.googleusercontent.com"
 gh secret set GOOGLE_CLIENT_SECRET --body "GOCSPX-abcdefghijklmnopqrstuvwxyz123456"
-gh secret set GITHUB_CLIENT_ID --body "Iv1.abcdefghijkl"
-gh secret set GITHUB_CLIENT_SECRET --body "abcdefghijklmnopqrstuvwxyz1234567890abcdef"
+gh secret set OAUTH_GITHUB_CLIENT_ID --body "Iv1.abcdefghijkl"
+gh secret set OAUTH_GITHUB_CLIENT_SECRET --body "abcdefghijklmnopqrstuvwxyz1234567890abcdef"
 gh secret set TWO_FACTOR_ENCRYPTION_KEY --body "M4nB7vC2xZ9pQ1rT6sL8wE3yJ5kD0fG7h+xyz789="
 ```
 

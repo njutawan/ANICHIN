@@ -15,7 +15,7 @@
 # What it sets:
 #   - NEXTAUTH_SECRET, NEXTAUTH_URL
 #   - GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
-#   - GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET
+#   - OAUTH_GITHUB_CLIENT_ID, OAUTH_GITHUB_CLIENT_SECRET (GitHub forbids secret names starting with GITHUB_)
 #   - TWO_FACTOR_ENCRYPTION_KEY
 #   - POSTGRES_PASSWORD
 #   - DATABASE_URL (constructed from POSTGRES_PASSWORD)
@@ -216,8 +216,8 @@ echo ""
 echo "  OAuth:"
 echo "    GOOGLE_CLIENT_ID            = ${GOOGLE_CLIENT_ID:0:30}..."
 echo "    GOOGLE_CLIENT_SECRET        = ${GOOGLE_CLIENT_SECRET:0:8}****"
-echo "    GITHUB_CLIENT_ID            = ${GITHUB_CLIENT_ID:0:20}..."
-echo "    GITHUB_CLIENT_SECRET        = ${GITHUB_CLIENT_SECRET:0:8}****"
+echo "    OAUTH_GITHUB_CLIENT_ID      = ${GITHUB_CLIENT_ID:0:20}..."
+echo "    OAUTH_GITHUB_CLIENT_SECRET  = ${GITHUB_CLIENT_SECRET:0:8}****"
 echo ""
 echo "  Database:"
 echo "    POSTGRES_PASSWORD           = ${POSTGRES_PASSWORD:0:8}****"
@@ -262,8 +262,8 @@ set_secret "TWO_FACTOR_ENCRYPTION_KEY" "$TWO_FACTOR_KEY"
 # OAuth
 set_secret "GOOGLE_CLIENT_ID" "$GOOGLE_CLIENT_ID"
 set_secret "GOOGLE_CLIENT_SECRET" "$GOOGLE_CLIENT_SECRET"
-set_secret "GITHUB_CLIENT_ID" "$GITHUB_CLIENT_ID"
-set_secret "GITHUB_CLIENT_SECRET" "$GITHUB_CLIENT_SECRET"
+set_secret "OAUTH_GITHUB_CLIENT_ID" "$GITHUB_CLIENT_ID"
+set_secret "OAUTH_GITHUB_CLIENT_SECRET" "$GITHUB_CLIENT_SECRET"
 
 # Database (constructed)
 DATABASE_URL="postgresql://anichin:${POSTGRES_PASSWORD}@db:5432/anichin?schema=public"
