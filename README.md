@@ -57,7 +57,7 @@
 | Framework        | Next.js 16 (App Router, Turbopack, standalone output)                 |
 | Language         | TypeScript 5.9                                                        |
 | Runtime          | Bun (dev) / Node.js 20+ (production)                                   |
-| Database         | SQLite (dev) → PostgreSQL 16 (production) via Prisma 6                |
+| Database         | PostgreSQL 16 (dev & produksi) via Prisma 6                           |
 | ORM              | Prisma 6.19                                                           |
 | Styling          | Tailwind CSS 4 + tw-animate-css                                       |
 | UI Components    | shadcn/ui (Radix UI primitives)                                       |
@@ -75,7 +75,7 @@
 ### Prasyarat
 
 - **Node.js 20+** atau **Bun 1.1+** (rekomendasi: Bun untuk dev)
-- **PostgreSQL 16+** (untuk produksi; SQLite untuk dev sudah include)
+- **PostgreSQL 16+** (dev & produksi — schema Prisma hanya mendukung PostgreSQL)
 - **Git**
 
 ### Instalasi
@@ -93,9 +93,14 @@ cp .env.example .env
 #   → Edit .env:
 #     - NEXTAUTH_SECRET=$(openssl rand -hex 32)
 #     - NEXTAUTH_URL=http://localhost:3000
-#     - DATABASE_URL (default: file:./db/custom.db)
+#     - DATABASE_URL=postgresql://anichin:anichin@localhost:5432/anichin?schema=public
 
-# 4. Generate Prisma client + push schema ke SQLite
+# 3b. Siapkan PostgreSQL 16 (opsi cepat pakai Docker)
+docker run -d --name anichin-db -p 5432:5432 \
+  -e POSTGRES_USER=anichin -e POSTGRES_PASSWORD=anichin -e POSTGRES_DB=anichin \
+  postgres:16-alpine
+
+# 4. Generate Prisma client + push schema ke PostgreSQL
 bun run db:generate
 bun run db:push
 
@@ -115,7 +120,8 @@ Buka [http://localhost:3000](http://localhost:3000) — server siap dalam ~2 det
 ```
 anichin/
 ├── prisma/
-│   └── schema.prisma           # Skema database (SQLite default, switch ke PostgreSQL)
+│   ├── schema.prisma           # Skema database (PostgreSQL)
+│   └── migrations/             # Prisma Migrate (lihat docs/MIGRATIONS.md)
 ├── public/
 │   ├── anime/                  # 29 poster SVG + 5 banner SVG
 │   ├── icon-192.png            # PWA icon (maskable)
@@ -125,13 +131,14 @@ anichin/
 │   └── og-image.png
 ├── scripts/
 │   ├── seed.ts                 # Seed 24 anime + 223 episode
-│   ├── gen-svgs.ts             # Generate poster/banner SVG
-│   ├── gen-images.ts           # Generate gambar via z-ai SDK
-│   ├── migrate-to-postgres.ts   # SQLite → PostgreSQL migrasi
-│   ├── migrate-rollback.ts      # Rollback ke SQLite
-│   ├── fetch-from-anilist.ts    # Fetch metadata dari AniList GraphQL
-│   ├── fetch-from-jikan.ts      # Fetch dari Jikan (MyAnimeList)
-│   └── start-dev.sh            # Detached dev server launcher
+│   ├── admin.ts                # CLI: buat/promosikan admin, reset password
+│   ├── start-postgres.ts       # Embedded PostgreSQL + migrate + seed (dev)
+│   ├── migrate-to-pg.ts        # Migrasi data SQLite → PostgreSQL
+│   ├── build.js                # Build universal (Vercel vs standalone)
+│   ├── setup-env.sh            # Setup env + prisma generate
+│   ├── backup-db.sh            # Backup PostgreSQL (dipakai deploy.yml)
+│   ├── restore-db.sh           # Restore dari backup
+│   └── verify-oauth.ts         # Verifikasi konfigurasi OAuth
 ├── src/
 │   ├── app/
 │   │   ├── api/                # 15 API routes (all rate-limited)
@@ -170,22 +177,19 @@ anichin/
 │   │   └── ui/                 # shadcn/ui primitives (40+ components)
 │   ├── hooks/
 │   │   ├── use-auth.ts         # Auth hook wrapping useSession
-│   │   ├── use-mobile.ts
-│   │   ├── use-toast.ts
-│   │   └── use-mounted.ts
+│   │   └── use-mounted.ts      # Hydration-safe mounted flag
 │   ├── lib/
 │   │   ├── auth.ts             # NextAuth config (cookie hardening, lockout)
 │   │   ├── session.ts          # requireUser / requireAdmin helpers
 │   │   ├── db.ts               # Prisma client singleton
-│   │   ├── rate-limit.ts       # 4-tier in-memory rate limiter
+│   │   ├── rate-limit.ts       # Tiered rate limiter (+ optional Redis store)
 │   │   ├── audit-log.ts        # File-based JSONL audit logger
 │   │   ├── security.ts         # Validation + sanitization helpers
 │   │   ├── store.ts            # Zustand stores
-│   │   ├── query-keys.ts       # TanStack Query key factory
 │   │   ├── types.ts
 │   │   └── utils.ts            # cn() helper
-│   └── middleware.ts           # Security headers + CSP on all routes
-├── next.config.ts              # Standalone output + 9 HTTP headers
+│   └── proxy.ts                # Security headers + CSP nonce (Next 16: pengganti middleware.ts)
+├── next.config.ts              # Standalone output + konfigurasi image
 ├── tailwind.config.ts
 ├── tsconfig.json
 ├── eslint.config.mjs
@@ -194,6 +198,20 @@ anichin/
 ├── .env.example                # Template untuk environment variables
 └── package.json
 ```
+
+---
+
+## Migrasi Database
+
+```bash
+npx prisma migrate dev --name <nama>   # dev: buat + jalankan migrasi baru
+npx prisma migrate deploy              # prod: jalankan migrasi (juga otomatis di docker/CI)
+npx prisma migrate status              # cek status migrasi
+```
+
+Database yang **sudah terisi** dan dibuat lewat `db push`/manual perlu
+di-baseline sekali dengan `npx prisma migrate resolve --applied 20261001000000_init`
+(penjelasan lengkap: [`docs/MIGRATIONS.md`](./docs/MIGRATIONS.md)).
 
 ---
 
@@ -210,8 +228,10 @@ anichin/
 | `db:migrate`          | `bun run db:migrate`                                | Prisma Migrate (dev mode, buat migration baru)         |
 | `db:reset`            | `bun run db:reset`                                  | Reset database + jalankan ulang semua migration       |
 | `seed`                | `bun run seed`                                      | Seed 24 anime + 22 genre + 223 episode                 |
-| `migrate:pg`          | `bun run migrate:pg`                                | Migrasi data SQLite → PostgreSQL (production)          |
-| `migrate:rollback`    | `bun run migrate:rollback`                          | Rollback schema ke SQLite                             |
+| `test`                | `bun run test`                                      | Unit test Vitest (9 suite / 111+ test)                 |
+| `db:migrate:prod`     | `bun run db:migrate:prod`                           | `prisma generate` + `prisma migrate deploy` (produksi) |
+| `db:migrate:status`   | `bun run db:migrate:status`                         | Cek status migration terhadap database                 |
+| `healthcheck`         | `bun run healthcheck`                               | Cek `/api/health` di localhost:3000                    |
 
 ---
 
@@ -221,7 +241,7 @@ Lihat [`.env.example`](./.env.example) untuk dokumentasi lengkap dengan komentar
 
 | Variable                  | Wajib | Deskripsi                                                            | Contoh                                       |
 | ------------------------- | :---: | -------------------------------------------------------------------- | -------------------------------------------- |
-| `DATABASE_URL`            |  ✅   | Connection string Prisma (SQLite untuk dev, PostgreSQL untuk prod)  | `file:./db/custom.db`                        |
+| `DATABASE_URL`            |  ✅   | Connection string Prisma (PostgreSQL — dev & prod)                   | `postgresql://anichin:…@localhost:5432/anichin?schema=public` |
 | `NEXTAUTH_SECRET`         |  ✅   | Secret untuk JWT & session cookies (min 16 char, 32 hex disarankan) | `openssl rand -hex 32`                       |
 | `NEXTAUTH_URL`            |  ✅   | URL kanonik aplikasi tanpa trailing slash                            | `https://anichin.id`                         |
 | `NODE_ENV`                |  ⬜   | Override environment (`production` / `development`)                 | `production`                                  |
@@ -367,9 +387,13 @@ Response menyertakan header `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-Rat
 
 ### Content Security Policy (CSP)
 
-Middleware `src/middleware.ts` menginject CSP header ke semua response:
-- `default-src 'self'`
-- `script-src 'self' 'unsafe-inline' 'unsafe-eval'`
+`src/proxy.ts` (middleware Next 16) menginject CSP header ke semua response:
+- Produksi: `script-src 'self' 'nonce-<per-request>' 'strict-dynamic'` — nonce
+  diteruskan lewat **request header** `Content-Security-Policy`, yang dibaca
+  Next.js untuk memberi `nonce` pada script-nya. Karena nonce hanya bisa
+  disuntikkan pada halaman yang dirender per-request, root layout memakai
+  `export const dynamic = 'force-dynamic'`.
+- Development: `script-src 'self' 'unsafe-inline' 'unsafe-eval'` (Turbopack HMR)
 - `frame-src 'self' youtube.com youtube-nocookie.com` (untuk trailer)
 - `object-src 'none'`, `base-uri 'none'`, `frame-ancestors 'self'`
 
