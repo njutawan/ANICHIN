@@ -1,7 +1,7 @@
 'use client';
 
 import { AnimeImage } from './anime-image';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
@@ -41,63 +41,11 @@ export function AnimeDetailModal() {
     enabled: !!detailSlug,
   });
 
-  // Inject dynamic JSON-LD + OG meta tags when anime detail is open
-  useEffect(() => {
-    if (!anime?.slug) return;
-
-    const injectedElements: HTMLElement[] = [];
-
-    // 1. JSON-LD for Google rich snippets
-    fetch(`/api/anime/${anime.slug}/jsonld`)
-      .then(res => res.json())
-      .then(data => {
-        const scriptEl = document.createElement('script');
-        scriptEl.type = 'application/ld+json';
-        scriptEl.id = `jsonld-anime-${anime.slug}`;
-        scriptEl.text = JSON.stringify(data.creativeWork);
-        document.head.appendChild(scriptEl);
-        injectedElements.push(scriptEl);
-      })
-      .catch(() => {});
-
-    // 2. Dynamic OpenGraph meta tags for social sharing
-    fetch(`/api/anime/${anime.slug}/og`)
-      .then(res => res.json())
-      .then(og => {
-        const SITE_URL = process.env.NEXTAUTH_URL || 'https://anichin.id';
-        const metas = [
-          { prop: 'og:title', content: og.title },
-          { prop: 'og:description', content: og.description },
-          { prop: 'og:image', content: og.image?.startsWith('http') ? og.image : `${SITE_URL}${og.image}` },
-          { prop: 'og:url', content: og.url },
-          { prop: 'og:type', content: og.type },
-          { name: 'twitter:title', content: og.title },
-          { name: 'twitter:description', content: og.description },
-          { name: 'twitter:image', content: og.image?.startsWith('http') ? og.image : `${SITE_URL}${og.image}` },
-        ];
-
-        metas.forEach(m => {
-          const metaEl = document.createElement('meta');
-          if (m.prop) metaEl.setAttribute('property', m.prop);
-          if (m.name) metaEl.setAttribute('name', m.name);
-          metaEl.setAttribute('content', m.content);
-          metaEl.id = `og-anime-${m.prop || m.name}`;
-          document.head.appendChild(metaEl);
-          injectedElements.push(metaEl);
-        });
-
-        // Update page title for social crawlers
-        document.title = og.title;
-      })
-      .catch(() => {});
-
-    return () => {
-      // Cleanup: remove all injected elements
-      injectedElements.forEach(el => {
-        if (el.parentNode) el.parentNode.removeChild(el);
-      });
-    };
-  }, [anime?.slug]);
+  // Catatan (code review 2026-10-02): JSON-LD & OG meta TIDAK lagi disuntikkan
+  // dari client. Scraper (Google, Facebook, WhatsApp, Twitter) tidak
+  // menjalankan JavaScript, jadi injeksi itu tidak pernah terbaca dan hanya
+  // menambah 2 request API per buka modal. Data terstruktur + OG tag sekarang
+  // dirender server-side di route kanonik `/anime/[slug]`.
 
   return (
     <Dialog open={detailOpen} onOpenChange={(o) => !o && closeDetail()}>
@@ -152,7 +100,8 @@ function DetailBody({ anime, onClose }: { anime: AnimeDetail; onClose: () => voi
   const onShare = async () => {
     // Sanitize slug to prevent URL injection
     const safeSlug = anime.slug.replace(/[^a-z0-9-]/gi, '');
-    const url = typeof window !== 'undefined' ? `${window.location.origin}/?anime=${safeSlug}` : '';
+    // Link yang dibagikan = route kanonik (bukan `/?anime=` yang tidak diindeks)
+    const url = typeof window !== 'undefined' ? `${window.location.origin}/anime/${safeSlug}` : '';
     const shareData = {
       title: anime.title,
       text: t('detail.shareText').replace('{title}', anime.title),
