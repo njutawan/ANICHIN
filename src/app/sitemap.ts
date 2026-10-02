@@ -1,45 +1,45 @@
+import type { MetadataRoute } from 'next';
 import { db } from '@/lib/db';
+import { SITE_URL, animePath } from '@/lib/site';
 
 // Sitemap queries PostgreSQL (`db.anime.findMany`), so it must NOT be
 // prerendered at build time (the Docker/CI image build has no database).
 // Generated on demand (crawlers hit it rarely; the CDN/proxy caches it).
 export const dynamic = 'force-dynamic';
 
-export default async function sitemap() {
-  const SITE_URL = 'https://anichin.id';
+/**
+ * Home routes per locale.
+ *
+ * Catatan SEO: entri fragmen seperti `/#list` atau `/#schedule` DIHAPUS —
+ * Google mengabaikan fragment di sitemap sehingga semuanya hanya menjadi
+ * duplikat dari halaman utama.
+ */
+const LOCALES = ['', '/en', '/ja'] as const;
+
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();
 
-  // Supported locales
-  const locales = ['', '/en', '/ja'];
+  const homeEntries: MetadataRoute.Sitemap = LOCALES.map((locale, i) => ({
+    url: locale === '' ? `${SITE_URL}/` : `${SITE_URL}${locale}`,
+    lastModified: now,
+    changeFrequency: 'hourly',
+    priority: i === 0 ? 1 : 0.8,
+  }));
 
-  // Static pages per locale
-  const sections = ['', '#list', '#schedule', '#collections'];
-  const priorities = [1, 0.9, 0.8, 0.7];
-  const frequencies = ['hourly', 'daily', 'daily', 'weekly'] as const;
-
-  const staticEntries = locales.flatMap((locale) =>
-    sections.map((section, i) => ({
-      url: `${SITE_URL}${locale}${section ? `/${section}` : ''}`,
-      lastModified: now,
-      changeFrequency: frequencies[i],
-      priority: priorities[i],
-    }))
-  );
-
-  // Dynamic anime pages per locale
+  // Anime detail pages — pakai route kanonik `/anime/[slug]`.
+  // Sebelumnya sitemap memakai `/?anime=slug` yang canonical-nya "/" sehingga
+  // tidak akan pernah diindeks Google.
   const animes = await db.anime.findMany({
-    select: { slug: true, title: true, updatedAt: true },
-    take: 100,
+    select: { slug: true, updatedAt: true },
+    orderBy: { updatedAt: 'desc' },
   });
 
-  const animeEntries = locales.flatMap((locale) =>
-    animes.map((a) => ({
-      url: `${SITE_URL}${locale}/?anime=${a.slug}`,
-      lastModified: a.updatedAt,
-      changeFrequency: 'weekly' as const,
-      priority: 0.6,
-    }))
-  );
+  const animeEntries: MetadataRoute.Sitemap = animes.map((a) => ({
+    url: `${SITE_URL}${animePath(a.slug)}`,
+    lastModified: a.updatedAt,
+    changeFrequency: 'weekly',
+    priority: 0.7,
+  }));
 
-  return [...staticEntries, ...animeEntries];
+  return [...homeEntries, ...animeEntries];
 }

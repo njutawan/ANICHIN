@@ -209,12 +209,17 @@ export const config = {
   // Apply to all routes except static assets (which are handled by Next.js CDN)
   matcher: [
     /*
-     * Match all request paths except:
-     * - _next/static (static files)
-     * - _next/image (image optimization)
+     * Match semua path KECUALI:
+     * - _next/static, _next/image (aset build)
      * - favicon.ico, logo.svg, robots.txt, sitemap.xml
-     * - public folder assets
+     * - berkas gambar di public/anime/*.svg|png|… (poster & banner)
+     *
+     * CATATAN PENTING: sebelumnya pola ini mengecualikan SELURUH prefix
+     * `anime/`, sehingga halaman kanonik `/anime/<slug>` tidak pernah melewati
+     * proxy → tidak dapat security header, dan tidak dapat nonce CSP (script
+     * JSON-LD kehilangan nonce-nya). Sekarang hanya berkas berekstensi gambar
+     * yang dikecualikan, bukan route halamannya.
      */
-    '/((?!_next/static|_next/image|favicon.ico|logo.svg|robots.txt|sitemap.xml|anime/).*)',
+    '/((?!_next/static|_next/image|favicon.ico|logo.svg|robots.txt|sitemap.xml|anime/[^/]+\\.(?:svg|png|jpe?g|webp|avif|gif|ico)$).*)',
   ],
 };

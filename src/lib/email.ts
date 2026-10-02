@@ -1,5 +1,4 @@
 /**
-import crypto from "crypto";
  * Email Service — Verification emails + token management.
  *
  * Provides:

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
@@ -18,7 +19,7 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const SITE_URL = "https://anichin.id";
+import { SITE_URL } from '@/lib/site';
 
 /**
  * Every route is rendered per-request.
@@ -118,17 +119,23 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Nonce CSP per-request dari src/proxy.ts. Script JSON-LD inline WAJIB
+  // memakai nonce ini: CSP produksi memakai 'strict-dynamic' sehingga script
+  // tanpa nonce diblokir browser (structured data hilang di produksi).
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
+
   return (
     <html lang="id" suppressHydrationWarning className="dark">
       <head>
         {/* JSON-LD: WebSite + Organization + SearchAction */}
         <script
           type="application/ld+json"
+          nonce={nonce}
           dangerouslySetInnerHTML={{
             __html: sanitizeForJSONLD(JSON.stringify({
               "@context": "https://schema.org",
@@ -204,6 +211,7 @@ export default function RootLayout({
         {/* JSON-LD: BreadcrumbList for homepage */}
         <script
           type="application/ld+json"
+          nonce={nonce}
           dangerouslySetInnerHTML={{
             __html: sanitizeForJSONLD(JSON.stringify({
               "@context": "https://schema.org",

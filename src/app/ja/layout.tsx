@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 
-const SITE_URL = 'https://anichin.id';
+import { SITE_URL } from '@/lib/site';
 
 export const metadata: Metadata = {
   title: {
