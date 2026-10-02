@@ -10,7 +10,7 @@
 
 > Tema streaming & unduh anime berbasis Next.js 16 yang mereplikasi pengalaman
 > situs anichin.moe. Dibangun dengan TypeScript, Tailwind CSS 4, shadcn/ui,
-> Prisma, TanStack Query, Zustand, dan Framer Motion. Aman untuk produksi
+> Prisma, TanStack Query, Zustand, dan Zod. Aman untuk produksi
 > (security-hardened) dan siap di-deploy via Docker.
 
 ---
@@ -39,6 +39,7 @@
 - 📚 **Browse & filter** berdasarkan genre, tipe (TV/Movie/OVA), status, dan sort (popularitas/skor/tanggal).
 - 🔍 **Pencarian real-time** dengan modal command-palette.
 - 📅 **Jadwal rilis harian** per hari (Senin–Minggu).
+- 🧭 **Halaman detail kanonik** `/anime/[slug]` (server-rendered, JSON-LD + OG per anime, masuk sitemap) — modal cepat tetap tersedia sebagai enhancement.
 - 📝 **Detail modal** dengan tab: Episode, Characters, Staff, Relations, Reviews, Comments.
 - ▶️ **Watch player** dengan continue-watching progress bar.
 - 🔖 **Bookmark system** + koleksi pilihan editor.
@@ -63,10 +64,10 @@
 | UI Components    | shadcn/ui (Radix UI primitives)                                       |
 | State Management | Zustand 5 (client) + TanStack Query 5 (server state)                  |
 | Auth             | NextAuth.js v4 (Credentials provider, JWT strategy)                    |
-| Animation        | Framer Motion 12                                                       |
+| Animation        | CSS/Tailwind transitions (tanpa library animasi tambahan)              |
 | Image Optimization| Next.js Image + Sharp 0.35                                           |
 | Charts           | Recharts 3 (admin dashboard)                                          |
-| Validation       | Zod 4                                                                 |
+| Validation       | Zod 4 (payload komentar & ulasan) + sanitasi manual di `lib/security` |
 
 ---
 
@@ -244,6 +245,9 @@ Lihat [`.env.example`](./.env.example) untuk dokumentasi lengkap dengan komentar
 | `DATABASE_URL`            |  ✅   | Connection string Prisma (PostgreSQL — dev & prod)                   | `postgresql://anichin:…@localhost:5432/anichin?schema=public` |
 | `NEXTAUTH_SECRET`         |  ✅   | Secret untuk JWT & session cookies (min 16 char, 32 hex disarankan) | `openssl rand -hex 32`                       |
 | `NEXTAUTH_URL`            |  ✅   | URL kanonik aplikasi tanpa trailing slash                            | `https://anichin.id`                         |
+| `NEXT_PUBLIC_SITE_URL`    |  ⬜   | Override URL publik (canonical/OG/sitemap). Dipakai juga di browser   | `https://staging.anichin.id`                 |
+| `TRUSTED_PROXY_HOPS`      |  ⬜   | Jumlah reverse proxy tepercaya di depan app (default `1`)            | `2`                                          |
+| `IP_HASH_SALT`            |  ⬜   | Salt HMAC untuk hash IP di audit log (disarankan di produksi)        | `openssl rand -hex 32`                       |
 | `NODE_ENV`                |  ⬜   | Override environment (`production` / `development`)                 | `production`                                  |
 | `NEXT_TELEMETRY_DISABLED` |  ⬜   | Set `1` untuk opt-out Next.js telemetry                              | `1`                                          |
 | `PORT`                    |  ⬜   | Port server (default: 3000)                                          | `3000`                                       |
