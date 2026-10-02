@@ -2,8 +2,20 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { requireUser } from '@/lib/session';
 import { checkRateLimit, addRateLimitHeaders } from '@/lib/rate-limit';
+import { sanitizeUserText } from '@/lib/security';
+import { getClientIp } from '@/lib/ip';
+import { auditLog } from '@/lib/audit-log';
+import {
+  commentPayloadSchema,
+  firstIssueMessage,
+  episodeNumberSchema,
+  listQuerySchema,
+  COMMENT_MAX_LENGTH,
+} from '@/lib/validation';
 
-// GET comments for an episode
+const CACHE_HEADERS = { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300' };
+
+// GET comments for an episode (dengan paginasi cursor)
 export async function GET(req: NextRequest) {
   try {
     const limited = await checkRateLimit(req, 'read');
@@ -11,25 +23,42 @@ export async function GET(req: NextRequest) {
 
     const { searchParams } = new URL(req.url);
     const animeSlug = searchParams.get('animeSlug');
-    const episodeNumber = searchParams.get('episodeNumber');
+    const rawEpisode = searchParams.get('episodeNumber');
 
-    if (!animeSlug || !episodeNumber) {
-      return NextResponse.json({ comments: [] });
+    if (!animeSlug || !rawEpisode) {
+      // Backward compatible: tanpa parameter → daftar kosong (bukan error).
+      return NextResponse.json({ comments: [], hasMore: false, nextCursor: null });
     }
 
-    const comments = await db.serverComment.findMany({
-      where: { animeSlug, episodeNumber: parseInt(episodeNumber, 10) },
+    const episode = episodeNumberSchema.safeParse(Number(rawEpisode));
+    const listParams = listQuerySchema.safeParse({
+      limit: searchParams.get('limit') ?? undefined,
+      cursor: searchParams.get('cursor') ?? undefined,
+    });
+    if (!episode.success || !listParams.success) {
+      return NextResponse.json({ error: 'Parameter tidak valid.' }, { status: 400 });
+    }
+
+    const { limit, cursor } = listParams.data;
+
+    // Ambil limit + 1 baris untuk mendeteksi apakah masih ada halaman berikutnya
+    // tanpa query COUNT terpisah.
+    const rows = await db.serverComment.findMany({
+      where: { animeSlug, episodeNumber: episode.data },
       orderBy: { createdAt: 'desc' },
+      take: limit + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       include: {
         user: { select: { name: true, avatar: true } },
       },
     });
 
+    const hasMore = rows.length > limit;
+    const comments = hasMore ? rows.slice(0, limit) : rows;
+    const nextCursor = hasMore ? comments[comments.length - 1]?.id ?? null : null;
+
     return addRateLimitHeaders(
-      NextResponse.json(
-        { comments },
-        { headers: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300' } }
-      ),
+      NextResponse.json({ comments, hasMore, nextCursor }, { headers: CACHE_HEADERS }),
       'read'
     );
   } catch {
@@ -47,7 +76,10 @@ export async function POST(req: NextRequest) {
     }
 
     const limited = await checkRateLimit(req, 'search');
-    if (limited) return limited;
+    if (limited) {
+      await auditLog.rateLimitHit(getClientIp(req), '/api/comments', 'search');
+      return limited;
+    }
 
     const [session, authErr] = await requireUser(req);
     if (authErr) return authErr;
@@ -60,47 +92,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
     }
 
-    const { animeSlug, episodeNumber, comment } = body as {
-      animeSlug?: unknown;
-      episodeNumber?: unknown;
-      comment?: unknown;
-    };
-
-    // Type validation
-    if (typeof animeSlug !== 'string' || typeof comment !== 'string') {
-      return NextResponse.json({ error: 'Data tidak valid.' }, { status: 400 });
+    // Validasi terpusat (Zod) — tipe, rentang, dan batas panjang yang SAMA
+    // dengan nilai yang disimpan.
+    const parsed = commentPayloadSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: firstIssueMessage(parsed.error) }, { status: 400 });
     }
 
-    // Numeric type validation (avoid parseInt silently returning NaN)
-    if (typeof episodeNumber !== 'number' || !Number.isFinite(episodeNumber)) {
-      return NextResponse.json({ error: 'Episode number tidak valid.' }, { status: 400 });
-    }
-    if (episodeNumber < 1 || episodeNumber > 9999) {
-      return NextResponse.json({ error: 'Episode number di luar rentang.' }, { status: 400 });
-    }
+    const { animeSlug, episodeNumber, comment } = parsed.data;
+    const sanitizedComment = sanitizeUserText(comment, COMMENT_MAX_LENGTH);
 
-    if (!animeSlug || !comment) {
-      return NextResponse.json({ error: 'Data tidak lengkap.' }, { status: 400 });
+    // Sanitasi bisa memangkas input pendek menjadi kosong (mis. hanya tag HTML).
+    if (sanitizedComment.length < 3) {
+      return NextResponse.json({ error: 'Komentar terlalu pendek.' }, { status: 400 });
     }
-
-    // Slug format validation (prevent path traversal / weird input)
-    if (!/^[a-z0-9-]+$/.test(animeSlug) || animeSlug.length > 200) {
-      return NextResponse.json({ error: 'Anime slug tidak valid.' }, { status: 400 });
-    }
-
-    if (comment.trim().length < 3) {
-      return NextResponse.json({ error: 'Komen terlalu pendek.' }, { status: 400 });
-    }
-    if (comment.length > 1000) {
-      return NextResponse.json({ error: 'Komen terlalu panjang (max 1000 char).' }, { status: 400 });
-    }
-
-    // Sanitize comment (basic XSS prevention — React escapes by default, but defense in depth)
-    const sanitizedComment = comment
-      .trim()
-      .slice(0, 300)
-      .replace(/\u0000/g, '') // null bytes
-      .replace(/[\u200B-\u200D\uFEFF]/g, ''); // zero-width chars (could be used to bypass filters)
 
     const created = await db.serverComment.create({
       data: {
