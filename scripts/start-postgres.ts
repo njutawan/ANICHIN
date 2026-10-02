@@ -4,14 +4,17 @@
  * Usage: bun run scripts/start-postgres.ts
  *
  * Yang dilakukan:
- * 1. Inisialisasi data directory PostgreSQL di ./pgdata (user space, tanpa sudo)
- * 2. Jalankan server di port 5433
- * 3. Buat database "anichin"
- * 4. Tulis DATABASE_URL ke .env (jika belum menunjuk ke port 5433)
- * 5. Generate Prisma client
- * 6. Terapkan migrasi (prisma migrate deploy)
- * 7. Isi data contoh (opsional: SEED=1 bun run scripts/start-postgres.ts)
- * 8. Jalankan `next dev` di http://localhost:3000
+ * 1. Inisialisasi + jalankan PostgreSQL bawaan di ./pgdata (user space, tanpa
+ *    sudo) pada port 5433 dengan user/password/database `anichin`
+ * 2. Buat database "anichin" (kalau belum ada)
+ * 3. Tulis DATABASE_URL ke .env
+ * 4. `prisma generate` + `prisma migrate deploy`
+ *    (+ `scripts/seed.ts` bila SEED=1)
+ * 5. Jalankan `next dev` di http://localhost:3000
+ *
+ * CATATAN: kredensial embedded PG di-bake saat initdb. Kalau PG_USER /
+ * PG_PASSWORD / PG_PORT diubah, hapus dulu folder ./pgdata agar cluster
+ * di-inisialisasi ulang.
  *
  * CATATAN: script ini sebelumnya masih mengacu ke era SQLite (mengganti
  * provider schema menjadi sqlite saat shutdown, membaca db/custom.db, dan
@@ -44,8 +47,15 @@ async function main() {
   console.log('📦 1/6 Inisialisasi PostgreSQL...');
   const pg = new EmbeddedPostgres({
     databaseDir: PG_DATA_DIR,
-    pgPort: PG_PORT,
-    persistenceDir: path.join(PG_DATA_DIR, 'persistence'),
+    // Nama opsinya `port` (bukan `pgPort`) — sebelumnya salah nama sehingga
+    // server tetap listen di 5432 sementara .env menunjuk ke 5433.
+    port: PG_PORT,
+    // Harus sama dengan kredensial di DATABASE_URL, else `migrate deploy`
+    // gagal login (initdb memakai opsi ini untuk membuat superuser).
+    user: PG_USER,
+    password: PG_PASSWORD,
+    authMethod: 'scram-sha-256',
+    persistent: true,
   });
   await pg.initialise();
 
