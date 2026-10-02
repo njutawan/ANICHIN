@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Image from 'next/image';
+import { isRemoteImageSrc, needsUnoptimized } from '@/lib/image-hosts';
 
 interface AnimeImageProps {
   src: string;
@@ -46,9 +47,15 @@ function generateFallbackSvg(title: string): string {
  * Solusi: SVG (dan data-URI) disajikan langsung dengan `unoptimized` — tidak
  * lewat optimizer, sehingga tidak perlu mengaktifkan dangerouslyAllowSVG
  * (yang membuka risiko XSS lewat SVG dari host eksternal).
+ *
+ * P1-5: gambar remote dari host di luar whitelist (`images.remotePatterns`)
+ * juga disajikan langsung. Kalau tetap dilewatkan optimizer, Next menjawab
+ * HTTP 400 dan poster admin yang memakai CDN lain akan hilang; dengan begini
+ * gambar tetap tampil, tetapi server kita tidak pernah mengunduhnya.
  */
 function isUnoptimizable(src: string): boolean {
-  return src.startsWith('data:') || /\.svg(\?|#|$)/i.test(src);
+  if (src.startsWith('data:') || /\.svg(\?|#|$)/i.test(src)) return true;
+  return isRemoteImageSrc(src) && needsUnoptimized(src);
 }
 
 export function AnimeImage({ src, alt, className, width, height, fill, sizes, priority }: AnimeImageProps) {

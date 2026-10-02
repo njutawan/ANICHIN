@@ -12,7 +12,7 @@
 | --- | --- |
 | `bunx tsc --noEmit` | ✅ 0 error |
 | `bun run lint` | ✅ 0 error, 0 warning |
-| `bunx vitest run` | ✅ **211 test lulus** (22 file) — naik dari 118 (93 test baru) |
+| `bunx vitest run` | ✅ **226 test lulus** (23 file) — naik dari 118 (108 test baru) |
 | `bun audit` | ✅ **0 vulnerability** (sebelumnya 14: 4 high) |
 | `next build` (Turbopack) | ✅ sukses, route `/anime/[slug]` terdaftar sebagai dynamic |
 | `next build --webpack` | ✅ sukses (validasi tipe route Next dijalankan) |
@@ -47,7 +47,7 @@ Legenda: ✅ diperbaiki · 🟡 sebagian / perlu tindak lanjut · ⬜ belum
 | P1-2 | `jsonld`/`og` tanpa rate limit & tanpa validasi slug | ✅ | Keduanya kini rate-limited + validasi slug + `auditLog`; logika dipusatkan di `src/lib/anime-seo.ts` |
 | P1-3 | JSON-LD inline tanpa nonce (CSP `strict-dynamic`) | ✅ | `layout.tsx` + `structured-data.tsx` membaca `x-nonce`; terbukti nonce HTML == nonce header saat smoke test |
 | P1-4 | Homepage `force-dynamic` + 25 `useQuery` | ✅ | Prefetch RSC + hidrasi TanStack Query: kunjungan pertama **0 request API** untuk data homepage (sebelumnya ~17) dan **0 query DB** selama TTL cache. Data penting dikirim sebagai props → ada di HTML. `force-dynamic` **sengaja dipertahankan** (nonce CSP butuh HTML dinamis) — yang di-cache adalah datanya (`unstable_cache`), sesuai catatan review. Satu loader gagal ≠ halaman 500 (payload kosong + log). Detail di §P1-4 |
-| P1-5 | `images.remotePatterns: '**'` | ⬜ | Belum — perlu daftar host CDN final |
+| P1-5 | `images.remotePatterns: '**'` | ✅ | Whitelist di `src/lib/image-hosts.ts`: default `s4.anilist.co`, `cdn.myanimelist.net`, `image.tmdb.org` + tambahan lewat `NEXT_PUBLIC_IMAGE_HOSTS` (koma/spasi, mendukung URL utuh & wildcard). Terverifikasi: host asing → **400 `"url" parameter is not allowed`**, host whitelist → lolos (fetch dicoba), gambar lokal tetap dioptimasi (200 PNG). Poster dari host tak terdaftar tetap tampil lewat `unoptimized` (langsung dari sumbernya), jadi data admin tidak rusak. **Perlu masukan Anda:** daftar CDN/CDN streaming final untuk dimasukkan ke env produksi |
 | P1-6 | 16 dependency tak terpakai + README tidak akurat | ✅ | 18 paket dihapus dari `package.json` + `bun.lock` diregenerasi; README diperbaiki (Framer Motion/Zod); zod kini benar-benar dipakai |
 | P1-7 | Audit log: `appendFileSync` + hash IP tanpa salt | ✅ | Antrean `fs.promises.appendFile`, rotasi async, HMAC-SHA256 + `IP_HASH_SALT` |
 | P1-8 | Index DB kurang | ✅ | Migrasi `20261002000000_add_perf_indexes` + `schema.prisma` (3 index) |
@@ -64,10 +64,9 @@ Legenda: ✅ diperbaiki · 🟡 sebagian / perlu tindak lanjut · ⬜ belum
 
 ### Sisa pekerjaan (rekomendasi urutan)
 
-1. **P1-5** — whitelist host gambar (`s4.anilist.co`, `cdn.myanimelist.net`, dst).
-2. **P1-12** — `next.config.ts`: pakai `require()` lazy untuk bundle-analyzer + fallback `npx` di `scripts/build.js`.
-3. **P2** — `sw.js` cache version otomatis saat build, Dependabot, `SECURITY.md`, E2E smoke test, dan menyambungkan form komentar modal ke `/api/comments` (saat ini komentar modal hanya tersimpan di localStorage sehingga tidak pernah terlihat pengguna lain).
-4. **Kalau nanti mau pasar Jepang** — tambahkan kamus `ja` sungguhan (termasuk terjemahan judul/sinopsis dari sumber data), lalu hapus redirect `/ja` dan daftarkan `ja` di `ROUTE_LOCALES` (src/lib/i18n.ts) + hreflang/sitemap.
+1. **P1-12** — `next.config.ts`: pakai `require()` lazy untuk bundle-analyzer + fallback `npx` di `scripts/build.js`.
+2. **P2** — `sw.js` cache version otomatis saat build, Dependabot, `SECURITY.md`, E2E smoke test, dan menyambungkan form komentar modal ke `/api/comments` (saat ini komentar modal hanya tersimpan di localStorage sehingga tidak pernah terlihat pengguna lain).
+3. **Kalau nanti mau pasar Jepang** — tambahkan kamus `ja` sungguhan (termasuk terjemahan judul/sinopsis dari sumber data), lalu hapus redirect `/ja` dan daftarkan `ja` di `ROUTE_LOCALES` (src/lib/i18n.ts) + hreflang/sitemap.
 
 ---
 
@@ -189,6 +188,13 @@ remotePatterns: [{ protocol: 'https', hostname: '**' }],
 ```
 - Siapa pun bisa memakai `/_next/image?url=https://situs-lain/…` sebagai proxy/optimizer gratis (abuse biaya CPU + potensi vektor pemindaian jaringan).
 - **Fix:** whitelist host asli: `s4.anilist.co`, `cdn.myanimelist.net`, `image.tmdb.org`, CDN streaming sendiri, dst.
+- **Resolusi (PR ini):** whitelist dipusatkan di `src/lib/image-hosts.ts` dan dipakai `next.config.ts`:
+  - default: `s4.anilist.co`, `cdn.myanimelist.net`, `image.tmdb.org`;
+  - tambahan tanpa ubah kode: `NEXT_PUBLIC_IMAGE_HOSTS="cdn.saya.id, bunnycdn.com, *.bunnycdn.com"` (dibaca saat build, juga di browser);
+  - wildcard mengikuti semantik Next: `*.bunnycdn.com` **hanya** subdomain, apex perlu entri terpisah (perilaku ini diverifikasi lewat `/_next/image`, lalu helper klien disamakan supaya tidak ada gambar yang "dianggap boleh" tapi ditolak optimizer);
+  - `AnimeImage`, hero slider, dan tab karakter/staff menandai `unoptimized` untuk host di luar daftar → poster dari CDN lain tetap tampil (langsung dari sumbernya), optimizer kita tidak dipakai sebagai proxy;
+  - `/anime/*.svg` tetap `unoptimized` seperti sebelumnya (SVG memang tidak boleh lewat optimizer).
+- **Yang masih dibutuhkan dari pemilik situs:** daftar CDN/CDN streaming final (mis. domain CDN sendiri) untuk dimasukkan ke `NEXT_PUBLIC_IMAGE_HOSTS` di environment produksi; tanpa itu gambar dari CDN tersebut tampil tanpa konversi WebP/AVIF.
 
 ### P1-6. 16 dependensi tidak dipakai + README tidak akurat
 Dependency tanpa satu pun import di `src/`:

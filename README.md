@@ -246,6 +246,7 @@ Lihat [`.env.example`](./.env.example) untuk dokumentasi lengkap dengan komentar
 | `NEXTAUTH_SECRET`         |  ✅   | Secret untuk JWT & session cookies (min 16 char, 32 hex disarankan) | `openssl rand -hex 32`                       |
 | `NEXTAUTH_URL`            |  ✅   | URL kanonik aplikasi tanpa trailing slash                            | `https://anichin.id`                         |
 | `NEXT_PUBLIC_SITE_URL`    |  ⬜   | Override URL publik (canonical/OG/sitemap). Dipakai juga di browser   | `https://staging.anichin.id`                 |
+| `NEXT_PUBLIC_IMAGE_HOSTS` |  ⬜   | Host gambar tambahan untuk `next/image` (build-time, dipisah koma)   | `cdn.saya.id, *.bunnycdn.com`                |
 | `TRUSTED_PROXY_HOPS`      |  ⬜   | Jumlah reverse proxy tepercaya di depan app (default `1`)            | `2`                                          |
 | `IP_HASH_SALT`            |  ⬜   | Salt HMAC untuk hash IP di audit log (disarankan di produksi)        | `openssl rand -hex 32`                       |
 | `NODE_ENV`                |  ⬜   | Override environment (`production` / `development`)                 | `production`                                  |
@@ -418,6 +419,15 @@ mengambil seluruh datanya di server lalu menghidrasi TanStack Query:
   `force-dynamic` (wajib untuk nonce CSP) tidak lagi berarti puluhan query DB
   per request. Satu dataset gagal (mis. DB down) memakai payload kosong, bukan
   menjatuhkan halaman.
+
+### Image Optimizer (whitelist host)
+
+`next/image` hanya mengoptimasi gambar dari host yang terdaftar di
+`images.remotePatterns` (`src/lib/image-hosts.ts`): default `s4.anilist.co`,
+`cdn.myanimelist.net`, `image.tmdb.org`, plus `NEXT_PUBLIC_IMAGE_HOSTS`.
+Ini mencegah orang memakai `/_next/image?url=…` sebagai optimizer/proxy gratis
+untuk domain apa pun. Poster yang diisi admin dari host lain tetap tampil
+(langsung dari sumbernya, tanpa optimizer) — lihat `needsUnoptimized`.
 
 ### HTTP Security Headers (9 layer)
 

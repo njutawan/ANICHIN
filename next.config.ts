@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import bundleAnalyzer from "@next/bundle-analyzer";
+import { resolveImageRemotePatterns } from "./src/lib/image-hosts";
 
 const withBundleAnalyzer = bundleAnalyzer({
   enabled: process.env.ANALYZE === "true",
@@ -51,7 +52,16 @@ const nextConfig: NextConfig = {
   
   images: {
     formats: ['image/avif', 'image/webp'],
-    remotePatterns: [{ protocol: 'https', hostname: '**' }],
+    /**
+     * P1-5: sebelumnya `hostname: '**'` — siapa pun bisa memakai
+     * `/_next/image?url=…` sebagai optimizer/proxy gratis untuk domain apa pun.
+     * Sekarang hanya CDN yang dikenal (src/lib/image-hosts.ts) + tambahan dari
+     * env NEXT_PUBLIC_IMAGE_HOSTS, mis.
+     *   NEXT_PUBLIC_IMAGE_HOSTS="cdn.saya.id, *.bunnycdn.com"
+     * Gambar dari host lain tetap tampil di browser (langsung dari sumbernya,
+     * lihat `needsUnoptimized`) — hanya tidak dioptimasi server kita.
+     */
+    remotePatterns: resolveImageRemotePatterns(process.env.NEXT_PUBLIC_IMAGE_HOSTS),
     minimumCacheTTL: 3600,
     // Perf: limit generated widths so we never emit oversized variants
     deviceSizes: [640, 750, 828, 1080, 1200, 1920],
