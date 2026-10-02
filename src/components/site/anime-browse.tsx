@@ -8,6 +8,7 @@ import { SectionHeading } from './latest-updates';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n-context';
+import { animeListUrl, homeQueryKeys } from '@/lib/queries/home';
 import type { AnimeCardData } from '@/lib/types';
 
 // Type options — labels are kept literal (industry proper nouns).
@@ -34,7 +35,7 @@ export function AnimeBrowseSection() {
   const [showFilters, setShowFilters] = useState(false);
 
   const { data: genresData } = useQuery({
-    queryKey: ['genres-list'],
+    queryKey: homeQueryKeys.genres,
     queryFn: async () => {
       const res = await fetch('/api/genres');
       if (!res.ok) throw new Error('genres');
@@ -44,11 +45,11 @@ export function AnimeBrowseSection() {
   });
   const genres: { id: string; name: string; slug: string; count: number }[] = (genresData?.genres ?? []).filter((g: any) => g.count > 0);
 
-  const params = new URLSearchParams({ genre, type, sort, page: String(page), limit: '18' });
+  const listUrl = animeListUrl({ genre, type, sort, page, limit: 18 });
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ['anime-list', genre, type, sort, page],
+    queryKey: homeQueryKeys.animeList(genre, type, sort, page),
     queryFn: async () => {
-      const res = await fetch(`/api/anime?${params}`);
+      const res = await fetch(listUrl);
       if (!res.ok) throw new Error('anime list');
       return res.json();
     },

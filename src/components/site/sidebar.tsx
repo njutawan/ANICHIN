@@ -10,41 +10,39 @@ import { formatViews, DAY_ORDER } from '@/lib/types';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useI18n } from '@/lib/i18n-context';
+import { homeQueryKeys } from '@/lib/queries/home';
+import type { PopularPayload, SchedulePayload } from '@/lib/types';
 
-interface PopularItem {
-  slug: string;
-  title: string;
-  titleJp?: string | null;
-  poster: string;
-  type: string;
-  status: string;
-  score: number;
-  views: number;
-  rank?: number | null;
-  releasedEpisodes?: number | null;
-  totalEpisodes?: number | null;
-  airedDay?: string | null;
-}
+type PopularItem = PopularPayload['popular'][number];
 
-export function Sidebar() {
+/**
+ * Sidebar beranda. `initialPopular`/`initialSchedule` diisi RSC supaya isi
+ * ranking & jadwal sudah ada di HTML (sticky sidebar terlihat di layar besar
+ * sebelum JS selesai dimuat).
+ */
+export function Sidebar({
+  initialPopular,
+  initialSchedule,
+}: { initialPopular?: PopularPayload; initialSchedule?: SchedulePayload } = {}) {
   return (
     <aside className="space-y-6">
-      <PopularRanking />
-      <ScheduleCard />
+      <PopularRanking initialData={initialPopular} />
+      <ScheduleCard initialData={initialSchedule} />
       <DiscordCard />
     </aside>
   );
 }
 
-function PopularRanking() {
+function PopularRanking({ initialData }: { initialData?: PopularPayload } = {}) {
   const { t } = useI18n();
   const { data, isLoading } = useQuery({
-    queryKey: ['popular'],
+    queryKey: homeQueryKeys.popular,
     queryFn: async () => {
       const res = await fetch('/api/popular');
       if (!res.ok) throw new Error('popular');
       return res.json();
     },
+    initialData,
   });
   const items: PopularItem[] = data?.popular ?? [];
   const openDetail = useUIStore((s) => s.openDetail);
@@ -102,7 +100,7 @@ function PopularRanking() {
                         ⭐ {item.score.toFixed(1)}
                       </span>
                       <span className="flex items-center gap-0.5">
-                        <Eye className="h-2.5 w-2.5" /> {formatViews(item.views)}
+                        <Eye className="h-2.5 w-2.5" /> {formatViews(item.views ?? 0)}
                       </span>
                     </div>
                     <div className="flex items-center gap-1 mt-1">
@@ -125,15 +123,16 @@ function PopularRanking() {
   );
 }
 
-function ScheduleCard() {
+function ScheduleCard({ initialData }: { initialData?: SchedulePayload } = {}) {
   const { t } = useI18n();
   const { data, isLoading } = useQuery({
-    queryKey: ['schedule'],
+    queryKey: homeQueryKeys.schedule,
     queryFn: async () => {
       const res = await fetch('/api/schedule');
       if (!res.ok) throw new Error('schedule');
       return res.json();
     },
+    initialData,
   });
   const [activeDay, setActiveDay] = useState<string>(() => {
     const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });

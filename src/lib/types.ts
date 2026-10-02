@@ -143,3 +143,85 @@ export function timeAgo(date: string | number | Date, t?: (key: string) => strin
 }
 
 export const DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+/**
+ * Bentuk payload yang dikembalikan endpoint publik + loader server
+ * (src/lib/data/home.ts). Ditulis eksplisit supaya prefetch RSC dan
+ * komponen client tidak bisa "diam-diam" berbeda bentuk.
+ */
+export interface AnimeListPayload {
+  animes: AnimeCardData[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export interface LatestPayload {
+  episodes: EpisodeData[];
+  total: number;
+  page: number;
+  totalPages: number;
+}
+
+export interface TodayPayload {
+  episodes: EpisodeData[];
+  total: number;
+}
+
+export interface GenresPayload {
+  genres: { id: string; name: string; slug: string; count: number }[];
+}
+
+/** Anime ringkas untuk rail ranking (/api/popular, /api/schedule). */
+export interface RailAnime {
+  slug: string;
+  title: string;
+  titleJp?: string | null;
+  poster: string;
+  type: string;
+  status?: string;
+  score: number;
+  views?: number;
+  rank?: number | null;
+  releasedEpisodes?: number | null;
+  totalEpisodes?: number | null;
+  airedDay?: string | null;
+}
+
+export interface PopularPayload {
+  popular: RailAnime[];
+}
+
+export interface SchedulePayload {
+  schedule: Record<string, RailAnime[]>;
+  days: string[];
+}
+
+export interface StatsPayload {
+  totalAnime: number;
+  ongoing: number;
+  completed: number;
+  movies: number;
+  totalEpisodes: number;
+  trendingCount: number;
+  totalViews: number;
+}
+
+export interface FeaturedPayload {
+  featured: AnimeCardData[];
+}
+
+export interface CollectionEntry {
+  slug: string;
+  title: string;
+  subtitle: string;
+  icon: string;
+  accent: string;
+  count: number;
+  animes: AnimeCardData[];
+}
+
+export interface CollectionsPayload {
+  collections: CollectionEntry[];
+}

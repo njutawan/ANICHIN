@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 
-const SITE_URL = 'https://anichin.id';
+import { SITE_URL } from '@/lib/site';
 
 export const metadata: Metadata = {
   title: {
@@ -19,7 +19,6 @@ export const metadata: Metadata = {
     languages: {
       'id-ID': '/',
       'en-US': '/en',
-      'ja-JP': '/ja',
       'x-default': '/',
     },
   },

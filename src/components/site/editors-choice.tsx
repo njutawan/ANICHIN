@@ -9,53 +9,15 @@ import { cn } from '@/lib/utils';
 
 import type { AnimeCardData } from '@/lib/types';
 import { Star } from 'lucide-react';
-
-interface EditorialPick {
-  slug: string;
-  quote: string;
-  author: string;
-  role: string;
-  accent: string;
-}
-
-const EDITORIAL: EditorialPick[] = [
-  {
-    slug: 'shadow-blade',
-    quote: 'Animasinya gila, ceritanya gelap tapi nggak berlebihan. Tiap episode nanggung buat berhenti.',
-    author: 'Rina S.',
-    role: 'Senior Editor',
-    accent: 'from-red-500/20 to-transparent border-red-500/30',
-  },
-  {
-    slug: 'demon-hunter',
-    quote: 'Fight scene terbaik musim ini. Emosinya berasa banget, bukan cuma pukul-pukulan doang.',
-    author: 'Arif P.',
-    role: 'Action Specialist',
-    accent: 'from-amber-500/20 to-transparent border-amber-500/30',
-  },
-  {
-    slug: 'starlight-requiem',
-    quote: 'Soundtrack-nya bikin merinding. Visual space-nya aesthetic parah. Nggak nyesel marathon.',
-    author: 'Maya K.',
-    role: 'Music Editor',
-    accent: 'from-blue-500/20 to-transparent border-blue-500/30',
-  },
-  {
-    slug: 'cherry-blossom',
-    quote: 'Slow burn yang worth it. Romance-nya gentle, nggak cringe. Cocok buat healing.',
-    author: 'Yuki T.',
-    role: 'Romance Editor',
-    accent: 'from-pink-500/20 to-transparent border-pink-500/30',
-  },
-];
+import { EDITORIAL_PICKS, EDITORIAL_SLUGS } from '@/lib/editorial';
+import { animeListUrl, HOME_QUERY_PARAMS, homeQueryKeys } from '@/lib/queries/home';
 
 export function EditorsChoice() {
   const openDetail = useUIStore((s) => s.openDetail);
   const { data, isLoading } = useQuery({
-    queryKey: ['editorial-picks'],
+    queryKey: homeQueryKeys.editorialPicks,
     queryFn: async () => {
-      const slugs = EDITORIAL.map((e) => e.slug).join(',');
-      const res = await fetch(`/api/anime?slugs=${encodeURIComponent(slugs)}&limit=4`);
+      const res = await fetch(animeListUrl({ ...HOME_QUERY_PARAMS.editorialPicks, slugs: EDITORIAL_SLUGS }));
       if (!res.ok) throw new Error('editorial');
       return res.json();
     },
@@ -83,7 +45,7 @@ export function EditorsChoice() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-5">
           {animes.map((anime, i) => {
-            const editorial = EDITORIAL.find((e) => e.slug === anime.slug) ?? EDITORIAL[0];
+            const editorial = EDITORIAL_PICKS.find((e) => e.slug === anime.slug) ?? EDITORIAL_PICKS[0];
             return (
               <button
                 key={anime.id}

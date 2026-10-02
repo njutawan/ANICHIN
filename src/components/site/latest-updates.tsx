@@ -5,21 +5,24 @@ import { useQuery } from '@tanstack/react-query';
 import { ChevronRight, Loader2, Sparkles } from 'lucide-react';
 import { EpisodeCard, AnimeCardSkeleton } from './anime-card';
 import { Button } from '@/components/ui/button';
-import type { EpisodeData } from '@/lib/types';
+import type { EpisodeData, LatestPayload } from '@/lib/types';
+import { homeQueryKeys } from '@/lib/queries/home';
 import { useI18n } from '@/lib/i18n-context';
 
-export function LatestUpdates() {
+export function LatestUpdates({ initialData }: { initialData?: LatestPayload } = {}) {
   const { t } = useI18n();
   const [page, setPage] = useState(1);
   const [all, setAll] = useState<EpisodeData[]>([]);
 
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ['latest', page],
+    queryKey: homeQueryKeys.latest(page),
     queryFn: async () => {
       const res = await fetch(`/api/latest?page=${page}&limit=18`);
       if (!res.ok) throw new Error('latest');
       return res.json();
     },
+    // Halaman 1 sudah dirender server; "Muat lebih banyak" tetap ambil dari API.
+    initialData: page === 1 ? initialData : undefined,
   });
 
   const episodes = data?.episodes ?? [];

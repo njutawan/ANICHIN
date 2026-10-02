@@ -26,7 +26,8 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { Badge } from '@/components/ui/badge';
-import { useI18n } from '@/lib/i18n-context';
+import { useI18n, useLanguageSwitch } from '@/lib/i18n-context';
+import { homeQueryKeys } from '@/lib/queries/home';
 
 const NAV = [
   { labelKey: 'nav.home', href: '#home', icon: Home },
@@ -387,13 +388,13 @@ function MobileThemeToggle() {
 }
 
 function MobileLanguageToggle() {
-  const { t, locale, setLocale } = useI18n();
+  const { t } = useI18n();
+  const { locale, toggle } = useLanguageSwitch();
   const mounted = useMounted();
   const current = mounted ? locale : 'id';
-  const next = current === 'id' ? 'en' : 'id';
   return (
     <button
-      onClick={() => setLocale(next)}
+      onClick={toggle}
       className="flex items-center gap-3 px-3 py-3 rounded-md text-sm font-medium hover:bg-secondary text-foreground/90"
       aria-label={t('header.menuLanguageLabel')}
     >
@@ -491,7 +492,7 @@ function MobilePwaInstall({ onDone }: { onDone: () => void }) {
 function GenreDropdown() {
   const { t } = useI18n();
   const { data, isLoading } = useQuery({
-    queryKey: ['genres-list'],
+    queryKey: homeQueryKeys.genres,
     queryFn: async () => {
       const res = await fetch('/api/genres');
       if (!res.ok) throw new Error('genres');

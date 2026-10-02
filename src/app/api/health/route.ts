@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { checkRedisHealth } from '@/lib/rate-limit-store';
+import { logger } from '@/lib/logger';
 
 // Health check should never be cached or rate-limited (load balancer polls frequently)
 export const dynamic = 'force-dynamic';
@@ -21,12 +22,19 @@ export async function GET() {
   const checks: Record<string, { status: 'ok' | 'fail'; latencyMs?: number; error?: string }> = {};
 
   // --- Database check ---
+  // SECURITY: hanya kode generik yang dikirim ke klien. Pesan error Prisma
+  // mentah bisa memuat host/port/nama database/kredensial — sebelumnya bocor
+  // dari endpoint publik tanpa auth ini. Detail lengkap hanya ke server log.
   try {
     const t0 = Date.now();
     await db.$queryRaw`SELECT 1`;
     checks.db = { status: 'ok', latencyMs: Date.now() - t0 };
   } catch (err) {
-    checks.db = { status: 'fail', error: err instanceof Error ? err.message : 'unknown' };
+    logger.error('[health] database check failed', {
+      module: 'api/health',
+      error: err instanceof Error ? err.message : String(err),
+    });
+    checks.db = { status: 'fail', error: 'DB_UNAVAILABLE' };
   }
 
   // --- Memory check (Node.js process RSS) ---

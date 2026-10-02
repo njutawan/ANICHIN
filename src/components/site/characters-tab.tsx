@@ -1,6 +1,7 @@
 'use client';
 
 import Image from 'next/image';
+import { needsUnoptimized } from '@/lib/image-hosts';
 import { Users, User, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { CharacterData, StaffData } from '@/lib/types';
@@ -71,6 +72,7 @@ function CharacterCard({ character }: { character: CharacterData }) {
         {character.image ? (
           <Image
             src={character.image}
+            unoptimized={needsUnoptimized(character.image)}
             alt={character.name}
             fill
             sizes="56px"
@@ -113,6 +115,7 @@ function StaffCard({ staff }: { staff: StaffData }) {
         {staff.image ? (
           <Image
             src={staff.image}
+            unoptimized={needsUnoptimized(staff.image)}
             alt={staff.name}
             fill
             sizes="48px"

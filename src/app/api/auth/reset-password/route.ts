@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { hashSync, isValidEmail } from '@/lib/auth';
+import { hashSync } from '@/lib/auth';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { logger } from '@/lib/logger';
 
@@ -130,5 +130,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// Helper exported for tests (not used in production)
-export { isValidEmail };
+// CATATAN: route file HANYA boleh mengekspor handler HTTP + config route.
+// Sebelumnya ada `export { isValidEmail }` di sini yang membuat `next build`
+// gagal: type-check route Next.js menolak export tambahan
+// ("Property 'isValidEmail' is incompatible with index signature").

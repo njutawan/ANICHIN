@@ -108,9 +108,11 @@ COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 # 4. Prisma schema (in case runtime migration is needed)
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 
-# Create writable directories (logs + SQLite fallback for dev-only images)
-RUN mkdir -p /app/logs /app/db && \
-    chown -R nextjs:nodejs /app/logs /app/db
+# Create writable log directory (the schema is PostgreSQL-only — the old
+# /app/db "SQLite fallback" directory was dead weight from the pre-Postgres
+# era and has been removed; see P1-12 in docs/CODE-REVIEW.md).
+RUN mkdir -p /app/logs && \
+    chown -R nextjs:nodejs /app/logs
 
 # Switch to non-root user
 USER nextjs

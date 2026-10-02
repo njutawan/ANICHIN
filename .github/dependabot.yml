@@ -1,0 +1,85 @@
+# Dependabot — update dependensi & base image secara otomatis.
+#
+# Catatan penting:
+# - Ekosistem `bun` (bukan `npm`): repo ini memakai `bun.lock` (lockfile teks,
+#   Bun ≥ 1.1.39) dan tidak punya package-lock/yarn/pnpm lock. Ekosistem `npm`
+#   hanya mengubah package.json dan meninggalkan bun.lock basi → CI gagal di
+#   `bun install --frozen-lockfile`.
+# - Dependabot baru membaca berkas ini dari branch **default** (main), jadi
+#   konfigurasi ini aktif setelah PR ini di-merge.
+# - Update keamanan (security updates) untuk ekosistem `bun` belum didukung
+#   Dependabot; advisory produksi tetap dijaga oleh job `bun audit --production`
+#   di CI. Nyalakan "Dependabot security updates" di Settings → Code security
+#   untuk alert-nya.
+version: 2
+
+updates:
+  # ── Dependensi aplikasi (Bun) ─────────────────────────────
+  - package-ecosystem: bun
+    directory: "/"
+    target-branch: main
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:00"
+      timezone: Asia/Jakarta
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      # Patch & minor production digabung supaya tidak membanjiri PR.
+      production-minor-patch:
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
+      # Dev tooling (eslint, vitest, types, …) — aman digabung.
+      development:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+    # Major versi tetap datang sebagai PR terpisah (mis. Next.js / React)
+    # supaya bisa ditinjau satu per satu, tidak digabung otomatis.
+
+  # ── GitHub Actions ────────────────────────────────────────
+  - package-ecosystem: github-actions
+    directory: "/"
+    target-branch: main
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:00"
+      timezone: Asia/Jakarta
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # ── Base image Docker ─────────────────────────────────────
+  # Dockerfile memakai oven/bun:1-alpine (deps/builder) & node:20-alpine (runner).
+  - package-ecosystem: docker
+    directory: "/"
+    target-branch: main
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - docker
+    commit-message:
+      prefix: "chore(docker)"
+    ignore:
+      # Node 20 = LTS yang dipakai runner & diuji CI; jangan lompat major
+      # otomatis (butuh uji ulang runtime Prisma/sharp).
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]

@@ -10,7 +10,7 @@
 
 > Tema streaming & unduh anime berbasis Next.js 16 yang mereplikasi pengalaman
 > situs anichin.moe. Dibangun dengan TypeScript, Tailwind CSS 4, shadcn/ui,
-> Prisma, TanStack Query, Zustand, dan Framer Motion. Aman untuk produksi
+> Prisma, TanStack Query, Zustand, dan Zod. Aman untuk produksi
 > (security-hardened) dan siap di-deploy via Docker.
 
 ---
@@ -39,6 +39,7 @@
 - 📚 **Browse & filter** berdasarkan genre, tipe (TV/Movie/OVA), status, dan sort (popularitas/skor/tanggal).
 - 🔍 **Pencarian real-time** dengan modal command-palette.
 - 📅 **Jadwal rilis harian** per hari (Senin–Minggu).
+- 🧭 **Halaman detail kanonik** `/anime/[slug]` (server-rendered, JSON-LD + OG per anime, masuk sitemap) — modal cepat tetap tersedia sebagai enhancement.
 - 📝 **Detail modal** dengan tab: Episode, Characters, Staff, Relations, Reviews, Comments.
 - ▶️ **Watch player** dengan continue-watching progress bar.
 - 🔖 **Bookmark system** + koleksi pilihan editor.
@@ -63,10 +64,10 @@
 | UI Components    | shadcn/ui (Radix UI primitives)                                       |
 | State Management | Zustand 5 (client) + TanStack Query 5 (server state)                  |
 | Auth             | NextAuth.js v4 (Credentials provider, JWT strategy)                    |
-| Animation        | Framer Motion 12                                                       |
+| Animation        | CSS/Tailwind transitions (tanpa library animasi tambahan)              |
 | Image Optimization| Next.js Image + Sharp 0.35                                           |
 | Charts           | Recharts 3 (admin dashboard)                                          |
-| Validation       | Zod 4                                                                 |
+| Validation       | Zod 4 (payload komentar & ulasan) + sanitasi manual di `lib/security` |
 
 ---
 
@@ -220,7 +221,7 @@ di-baseline sekali dengan `npx prisma migrate resolve --applied 20261001000000_i
 | Script                | Perintah                                            | Deskripsi                                              |
 | --------------------- | -------------------------------------------------- | ----------------------------------------------------- |
 | `dev`                 | `bun run dev`                                       | Jalankan dev server (Turbopack) di port 3000          |
-| `build`               | `bun run build`                                     | Build produksi standalone + copy static & public       |
+| `build`               | `bun run build` / `npm run build`                   | Build produksi standalone + copy static & public (Bun **atau** Node) |
 | `start`               | `bun run start`                                     | Jalankan server produksi (Node/Bun) standalone         |
 | `lint`                | `bun run lint`                                      | ESLint check pada seluruh codebase                     |
 | `db:push`             | `bun run db:push`                                   | Push schema.prisma ke database (overwrite)             |
@@ -228,10 +229,16 @@ di-baseline sekali dengan `npx prisma migrate resolve --applied 20261001000000_i
 | `db:migrate`          | `bun run db:migrate`                                | Prisma Migrate (dev mode, buat migration baru)         |
 | `db:reset`            | `bun run db:reset`                                  | Reset database + jalankan ulang semua migration       |
 | `seed`                | `bun run seed`                                      | Seed 24 anime + 22 genre + 223 episode                 |
-| `test`                | `bun run test`                                      | Unit test Vitest (9 suite / 111+ test)                 |
+| `test`                | `bun run test` / `npm test`                         | Unit test Vitest (28 file / 266 test)                  |
+| `test:e2e`            | `bun run test:e2e`                                  | E2E Playwright (build produksi + browser)              |
 | `db:migrate:prod`     | `bun run db:migrate:prod`                           | `prisma generate` + `prisma migrate deploy` (produksi) |
 | `db:migrate:status`   | `bun run db:migrate:status`                         | Cek status migration terhadap database                 |
 | `healthcheck`         | `bun run healthcheck`                               | Cek `/api/health` di localhost:3000                    |
+
+> **Tidak wajib Bun.** `npm run build`, `npm test`, dan `npm run lint` jalan penuh di Node 20+:
+> `scripts/build.js` memilih binary dari `node_modules/.bin/` (hasil `npm ci` / `bun install` / `pnpm install`),
+> dengan fallback `bunx` → `npx`. `ANALYZE=true` tetap butuh devDependencies terpasang, dan bila
+> `@next/bundle-analyzer` tidak ada build hanya memberi peringatan (tidak gagal).
 
 ---
 
@@ -244,6 +251,10 @@ Lihat [`.env.example`](./.env.example) untuk dokumentasi lengkap dengan komentar
 | `DATABASE_URL`            |  ✅   | Connection string Prisma (PostgreSQL — dev & prod)                   | `postgresql://anichin:…@localhost:5432/anichin?schema=public` |
 | `NEXTAUTH_SECRET`         |  ✅   | Secret untuk JWT & session cookies (min 16 char, 32 hex disarankan) | `openssl rand -hex 32`                       |
 | `NEXTAUTH_URL`            |  ✅   | URL kanonik aplikasi tanpa trailing slash                            | `https://anichin.id`                         |
+| `NEXT_PUBLIC_SITE_URL`    |  ⬜   | Override URL publik (canonical/OG/sitemap). Dipakai juga di browser   | `https://staging.anichin.id`                 |
+| `NEXT_PUBLIC_IMAGE_HOSTS` |  ⬜   | Host gambar tambahan untuk `next/image` (build-time, dipisah koma)   | `cdn.saya.id, *.bunnycdn.com`                |
+| `TRUSTED_PROXY_HOPS`      |  ⬜   | Jumlah reverse proxy tepercaya di depan app (default `1`)            | `2`                                          |
+| `IP_HASH_SALT`            |  ⬜   | Salt HMAC untuk hash IP di audit log (disarankan di produksi)        | `openssl rand -hex 32`                       |
 | `NODE_ENV`                |  ⬜   | Override environment (`production` / `development`)                 | `production`                                  |
 | `NEXT_TELEMETRY_DISABLED` |  ⬜   | Set `1` untuk opt-out Next.js telemetry                              | `1`                                          |
 | `PORT`                    |  ⬜   | Port server (default: 3000)                                          | `3000`                                       |
@@ -284,8 +295,8 @@ export NODE_ENV=production
 export NEXTAUTH_URL="https://anichin.id"
 export NEXTAUTH_SECRET="$(openssl rand -hex 32)"
 
-# Build standalone output
-bun run build
+# Build standalone output (Bun atau Node — script memilih binary yang ada)
+bun run build      # atau: npm run build
 
 # Jalankan server (Node.js recommended untuk standalone)
 node .next/standalone/server.js
@@ -397,6 +408,33 @@ Response menyertakan header `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-Rat
 - `frame-src 'self' youtube.com youtube-nocookie.com` (untuk trailer)
 - `object-src 'none'`, `base-uri 'none'`, `frame-ancestors 'self'`
 
+### Data Beranda (RSC + cache)
+
+Beranda (`/` dan `/en`, komponen server `src/components/home/home-content.tsx`)
+mengambil seluruh datanya di server lalu menghidrasi TanStack Query:
+
+- Loader query ada di `src/lib/data/home.ts` dan dibungkus `unstable_cache`
+  (TTL 120 detik untuk feed episode, 300 detik untuk katalog/statistik) — satu
+  query per dataset per TTL, bukan per kunjungan.
+- Kunci & parameter query terpusat di `src/lib/queries/home.ts` supaya
+  prefetch server dan `useQuery` di komponen tidak pernah berbeda kunci.
+- Data penting (episode hari ini, rilisan terbaru, ranking, jadwal, statistik)
+  dikirim sebagai props `initialData` sehingga ikut ter-render di HTML;
+  sisanya lewat `<HydrationBoundary>`.
+- Hasilnya: kunjungan pertama tidak memanggil `/api/*` dari browser, dan
+  `force-dynamic` (wajib untuk nonce CSP) tidak lagi berarti puluhan query DB
+  per request. Satu dataset gagal (mis. DB down) memakai payload kosong, bukan
+  menjatuhkan halaman.
+
+### Image Optimizer (whitelist host)
+
+`next/image` hanya mengoptimasi gambar dari host yang terdaftar di
+`images.remotePatterns` (`src/lib/image-hosts.ts`): default `s4.anilist.co`,
+`cdn.myanimelist.net`, `image.tmdb.org`, plus `NEXT_PUBLIC_IMAGE_HOSTS`.
+Ini mencegah orang memakai `/_next/image?url=…` sebagai optimizer/proxy gratis
+untuk domain apa pun. Poster yang diisi admin dari host lain tetap tampil
+(langsung dari sumbernya, tanpa optimizer) — lihat `needsUnoptimized`.
+
 ### HTTP Security Headers (9 layer)
 
 Dikirim oleh middleware + next.config.ts (defense-in-depth):
@@ -443,9 +481,40 @@ File `src/lib/audit-log.ts` menulis event ke `logs/audit.jsonl`:
 | **Sitemap.xml** (auto)           | `src/app/sitemap.ts`          | Static + dynamic anime pages, revalidate 1 jam        |
 | **Robots.txt**                   | `src/app/robots.ts`           | Allow `/`, disallow `/api/`, sitemap reference         |
 | **PWA Manifest**                 | `src/app/manifest.ts`         | name, icons (192/512), shortcuts, theme_color          |
+| **Service worker**               | `src/app/sw.js/route.ts`      | Cache PWA; `CACHE_VERSION` otomatis = commit SHA build  |
 | **JSON-LD structured data**      | `src/components/site/structured-data.tsx` | Schema.org VideoObject + BreadcrumbList     |
 | **Open Graph + Twitter Card**    | `src/app/layout.tsx`          | og:image, og:title, og:description, twitter:card      |
 | **Canonical URLs**               | `src/app/layout.tsx`          | Mencegah duplicate content                             |
+
+---
+
+## Testing E2E (Playwright)
+
+```bash
+# Sekali saja: unduh browser
+bunx playwright install chromium
+
+# Jalankan seluruh suite (build produksi standalone dijalankan otomatis)
+bun run test:e2e
+
+# Tanpa database: test publik tetap jalan, test ber-data di-skip
+E2E_WITH_DB=1 bun run test:e2e      # dengan DB + seed (bun run db:push && bun run seed)
+```
+
+| Berkas | Isi |
+| --- | --- |
+| `e2e/smoke.spec.ts` | Routing/locale, header keamanan + nonce CSP, 404, PWA (`/sw.js`, manifest), robots/sitemap, penolakan image optimizer, kontrak API komentar |
+| `e2e/comments.spec.ts` | Alur komentar lintas pengguna (butuh `E2E_WITH_DB=1`): kirim lewat UI → pengguna anonim lain melihatnya |
+
+Konfigurasi ada di `playwright.config.ts` (port 3100, `reuseExistingServer` di lokal). Di CI jalan sebagai job **🎭 E2E (Playwright)** dengan PostgreSQL yang di-seed.
+
+---
+
+## Keamanan & Pemeliharaan Dependensi
+
+- **Melaporkan kerentanan:** lihat [`SECURITY.md`](./SECURITY.md) — pakai GitHub private vulnerability reporting, jangan buka issue publik.
+- **UPDATE dependensi otomatis:** [`.github/dependabot.yml`](./.github/dependabot.yml) — ekosistem `bun` (lockfile `bun.lock`), `github-actions`, dan base image Docker; PR dikelompokkan per tipe (minor/patch), major ditinjau manual.
+- **Gate advisory produksi:** `bun audit --production` di CI (job 🔒 Security Audit) memblokir PR dengan advisory high di dependensi produksi.
 
 ---
 

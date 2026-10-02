@@ -7,6 +7,7 @@ import { SectionHeading } from './latest-updates';
 import { useUIStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
 import type { AnimeCardData } from '@/lib/types';
+import { animeListUrl, HOME_QUERY_PARAMS, homeQueryKeys } from '@/lib/queries/home';
 
 const SEASONS = [
   { label: 'Winter 2024', year: 2024, season: 'Winter' },
@@ -20,9 +21,9 @@ const SEASONS = [
 export function SeasonCalendar() {
   const openDetail = useUIStore((s) => s.openDetail);
   const { data, isLoading } = useQuery({
-    queryKey: ['all-anime-seasons'],
+    queryKey: homeQueryKeys.seasons,
     queryFn: async () => {
-      const res = await fetch('/api/anime?limit=100&sort=latest');
+      const res = await fetch(animeListUrl(HOME_QUERY_PARAMS.seasons));
       if (!res.ok) throw new Error('anime');
       return res.json();
     },

@@ -1,7 +1,8 @@
+import { headers } from 'next/headers';
 import { db } from '@/lib/db';
 import { sanitizeForJSONLD } from '@/lib/security';
 
-const SITE_URL = 'https://anichin.id';
+import { SITE_URL } from '@/lib/site';
 
 /**
  * Server component that injects JSON-LD structured data into the page.
@@ -11,6 +12,9 @@ const SITE_URL = 'https://anichin.id';
  * - FAQPage with common questions
  */
 export async function StructuredData() {
+  // Nonce CSP (lihat src/proxy.ts). Tanpa nonce, CSP produksi memakai
+  // 'strict-dynamic' → script JSON-LD inline diblokir browser.
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
   // Fetch top 10 trending anime with REAL review counts from DB
   const trending = await db.anime.findMany({
     where: { trending: true },
@@ -192,14 +196,17 @@ export async function StructuredData() {
     <>
       <script
         type="application/ld+json"
+        nonce={nonce}
         dangerouslySetInnerHTML={{ __html: sanitizeForJSONLD(JSON.stringify(itemList)) }}
       />
       <script
         type="application/ld+json"
+        nonce={nonce}
         dangerouslySetInnerHTML={{ __html: sanitizeForJSONLD(JSON.stringify(breadcrumb)) }}
       />
       <script
         type="application/ld+json"
+        nonce={nonce}
         dangerouslySetInnerHTML={{ __html: sanitizeForJSONLD(JSON.stringify(faq)) }}
       />
     </>

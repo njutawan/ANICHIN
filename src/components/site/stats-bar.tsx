@@ -5,30 +5,23 @@ import { Film, Tv, Clock, Eye } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatViews } from '@/lib/types';
 import { useI18n } from '@/lib/i18n-context';
+import { homeQueryKeys } from '@/lib/queries/home';
+import type { StatsPayload } from '@/lib/types';
 
-interface Stats {
-  totalAnime: number;
-  ongoing: number;
-  completed: number;
-  movies: number;
-  totalEpisodes: number;
-  trendingCount: number;
-  totalViews: number;
-}
-
-export function StatsBar() {
+export function StatsBar({ initialData }: { initialData?: StatsPayload } = {}) {
   const { t } = useI18n();
   const { data, isLoading } = useQuery({
-    queryKey: ['stats'],
+    queryKey: homeQueryKeys.stats,
     queryFn: async () => {
       const res = await fetch('/api/stats');
       if (!res.ok) throw new Error('stats');
       return res.json();
     },
     staleTime: 60_000,
+    initialData,
   });
 
-  const stats: Stats = data ?? {
+  const stats: StatsPayload = data ?? {
     totalAnime: 0,
     ongoing: 0,
     completed: 0,

@@ -3,6 +3,7 @@ import {
   incrementRateLimit,
   getRateLimitTTL,
 } from '@/lib/rate-limit-store';
+import { getClientIpFromHeaders } from '@/lib/ip';
 
 /**
  * Rate limiter for Next.js API routes.
@@ -28,13 +29,15 @@ export type RateLimitType = keyof typeof RATE_LIMITS;
 
 
 /**
- * Get client IP from request (Caddy passes X-Forwarded-For / X-Real-IP).
+ * Get client IP from request.
+ *
+ * Delegasi ke `@/lib/ip` yang hanya mempercayai header edge (Vercel/Cloudflare)
+ * atau entri XFF dari arah kanan sebanyak `TRUSTED_PROXY_HOPS`. Sebelumnya
+ * entri paling kiri dipakai — nilainya dikirim klien sehingga rate limit bisa
+ * dilewati hanya dengan mengarang header X-Forwarded-For.
  */
 function getClientIp(req: NextRequest): string {
-  const forwarded = req.headers.get('x-forwarded-for');
-  const realIp = req.headers.get('x-real-ip');
-  const ip = forwarded?.split(',')[0]?.trim() || realIp || 'unknown';
-  return ip.slice(0, 64);
+  return getClientIpFromHeaders(req.headers).slice(0, 64);
 }
 
 /**

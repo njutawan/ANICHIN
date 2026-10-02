@@ -15,6 +15,7 @@
 const { execSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { resolveCliCommand } = require('./lib/resolve-cli');
 
 const isVercel = process.env.VERCEL === '1';
 const isStandalone = !isVercel && process.env.DEPLOY_TARGET === 'standalone';
@@ -27,9 +28,19 @@ console.log(`  Output: ${isVercel ? '.next (Vercel-native)' : '.next/standalone 
 console.log('');
 
 // Step 1: Generate Prisma client (must run BEFORE next build)
+// P1-12: jangan asumsikan Bun. Dipakai binary lokal node_modules/.bin/prisma
+// (hasil `npm install` / `bun install` / `pnpm install`), dengan fallback
+// bunx → npx, jadi `npm run build` tetap jalan di environment Node-only.
 console.log('▶ Step 1: Generating Prisma client...');
+const prismaCommand = resolveCliCommand('prisma', 'generate');
+if (!prismaCommand) {
+  console.error('✗ Prisma CLI tidak ditemukan (node_modules/.bin/prisma, bunx, npx).');
+  console.error('  Jalankan `npm install` (atau `bun install`) lebih dulu.');
+  process.exit(1);
+}
+console.log(`  perintah: ${prismaCommand}`);
 try {
-  execSync('bunx prisma generate', { stdio: 'inherit' });
+  execSync(prismaCommand, { stdio: 'inherit' });
   console.log('✓ Prisma client generated\n');
 } catch {
   console.error('✗ Prisma generate failed');
@@ -37,9 +48,18 @@ try {
 }
 
 // Step 2: Run Next.js build
+// Argumen tambahan diteruskan ke `next build` (mis. `node scripts/build.js
+// --webpack` untuk memaksa webpack alih-alih Turbopack saat debugging).
+const nextArgs = ['build', ...process.argv.slice(2)].join(' ');
 console.log('▶ Step 2: Running next build...');
+const nextCommand = resolveCliCommand('next', nextArgs);
+if (!nextCommand) {
+  console.error('✗ Next.js CLI tidak ditemukan (node_modules/.bin/next, bunx, npx).');
+  process.exit(1);
+}
+console.log(`  perintah: ${nextCommand}`);
 try {
-  execSync('next build', { stdio: 'inherit' });
+  execSync(nextCommand, { stdio: 'inherit' });
   console.log('✓ Next.js build complete\n');
 } catch {
   console.error('✗ Next.js build failed');

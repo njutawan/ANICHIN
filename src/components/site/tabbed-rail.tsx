@@ -8,13 +8,20 @@ import { SectionHeading } from './latest-updates';
 import { cn } from '@/lib/utils';
 import type { AnimeCardData } from '@/lib/types';
 import { useI18n } from '@/lib/i18n-context';
+import {
+  animeListUrl,
+  HOME_TAB_PARAMS,
+  homeQueryKeys,
+  type HomeTabId,
+} from '@/lib/queries/home';
 
-type TabId = 'trending' | 'airing' | 'rated';
+type TabId = HomeTabId;
 
+/** URL dibangun dari parameter yang sama dengan yang dipakai prefetch RSC. */
 const TABS: { id: TabId; labelKey: string; subtitleKey: string; icon: typeof TrendingUp; url: string; pulse?: boolean }[] = [
-  { id: 'trending', labelKey: 'section.trending', subtitleKey: 'section.subtitle.trending', icon: TrendingUp, url: '/api/anime?sort=views&limit=18' },
-  { id: 'airing', labelKey: 'section.airing', subtitleKey: 'section.subtitle.airing', icon: Radio, url: '/api/anime?status=Ongoing&sort=latest&limit=18', pulse: true },
-  { id: 'rated', labelKey: 'section.topRated', subtitleKey: 'section.subtitle.topRated', icon: Star, url: '/api/anime?sort=score&limit=18' },
+  { id: 'trending', labelKey: 'section.trending', subtitleKey: 'section.subtitle.trending', icon: TrendingUp, url: animeListUrl(HOME_TAB_PARAMS.trending) },
+  { id: 'airing', labelKey: 'section.airing', subtitleKey: 'section.subtitle.airing', icon: Radio, url: animeListUrl(HOME_TAB_PARAMS.airing), pulse: true },
+  { id: 'rated', labelKey: 'section.topRated', subtitleKey: 'section.subtitle.topRated', icon: Star, url: animeListUrl(HOME_TAB_PARAMS.rated) },
 ];
 
 /**
@@ -28,7 +35,7 @@ export function TabbedRail() {
   const currentTab = TABS.find((tb) => tb.id === activeTab)!;
 
   const { data, isLoading } = useQuery({
-    queryKey: ['tabbed-rail', activeTab],
+    queryKey: homeQueryKeys.tabbedRail(activeTab),
     queryFn: async () => {
       const res = await fetch(currentTab.url);
       if (!res.ok) throw new Error('tabbed-rail');

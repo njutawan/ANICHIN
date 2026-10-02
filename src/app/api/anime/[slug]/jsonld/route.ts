@@ -1,115 +1,75 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { checkRateLimit, addRateLimitHeaders } from '@/lib/rate-limit';
+import { getClientIp } from '@/lib/ip';
+import { auditLog } from '@/lib/audit-log';
+import { buildAnimeCreativeWork, buildAnimeBreadcrumb } from '@/lib/anime-seo';
 
 /**
  * GET /api/anime/[slug]/jsonld
  *
- * Returns JSON-LD structured data for a specific anime.
- * This is the data Google reads for rich snippets (rating stars, reviews).
+ * JSON-LD untuk rich snippet Google (CreativeWork + AggregateRating + Review).
  *
- * Includes:
- * - CreativeWork schema (anime metadata)
- * - AggregateRating (from base score + user reviews)
- * - Individual Review objects (up to 5 most recent)
- * - BreadcrumbList (navigation context)
+ * Catatan: halaman kanonik `/anime/[slug]` kini merender JSON-LD ini
+ * server-side (lihat src/app/anime/[slug]/page.tsx), jadi endpoint ini
+ * disediakan untuk konsumen eksternal/integrasi — bukan lagi jalur utama
+ * karena metadata yang disuntik lewat JS tidak dibaca crawler.
  */
 
+const SLUG_RE = /^[a-z0-9-]+$/;
+
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
-  const { slug } = await params;
+  try {
+    const limited = await checkRateLimit(req, 'read');
+    if (limited) {
+      await auditLog.rateLimitHit(getClientIp(req), '/api/anime/[slug]/jsonld', 'read');
+      return limited;
+    }
 
-  const anime = await db.anime.findUnique({
-    where: { slug },
-    select: {
-      id: true,
-      slug: true,
-      title: true,
-      titleEn: true,
-      titleJp: true,
-      synopsis: true,
-      poster: true,
-      banner: true,
-      type: true,
-      status: true,
-      studio: true,
-      score: true,
-      views: true,
-      releasedYear: true,
-      season: true,
-      genres: { include: { genre: { select: { name: true } } } },
-    },
-  });
+    const { slug } = await params;
+    if (!SLUG_RE.test(slug) || slug.length > 200) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    }
 
-  if (!anime) {
-    return NextResponse.json({ error: 'Anime not found' }, { status: 404 });
+    const anime = await db.anime.findUnique({
+      where: { slug },
+      select: {
+        slug: true, title: true, titleEn: true, titleJp: true, synopsis: true,
+        poster: true, banner: true, type: true, status: true, studio: true,
+        score: true, releasedYear: true, rating: true,
+        genres: { include: { genre: { select: { name: true } } } },
+      },
+    });
+
+    if (!anime) return NextResponse.json({ error: 'Anime not found' }, { status: 404 });
+
+    const [reviewCount, reviews] = await Promise.all([
+      db.serverReview.count({ where: { animeSlug: slug } }),
+      db.serverReview.findMany({
+        where: { animeSlug: slug },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+        include: { user: { select: { name: true } } },
+      }),
+    ]);
+
+    const creativeWork = buildAnimeCreativeWork(
+      { ...anime, genres: anime.genres.map((g) => g.genre.name) },
+      reviews,
+      reviewCount
+    );
+
+    return addRateLimitHeaders(
+      NextResponse.json(
+        { creativeWork, breadcrumb: buildAnimeBreadcrumb(anime) },
+        { headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600' } }
+      ),
+      'read'
+    );
+  } catch {
+    return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });
   }
-
-  // Count reviews separately (Anime model doesn't have reviews relation in schema)
-  const reviewCount = await db.serverReview.count({ where: { animeSlug: slug } });
-
-  const reviews = await db.serverReview.findMany({
-    where: { animeSlug: slug },
-    orderBy: { createdAt: 'desc' },
-    take: 5,
-    include: { user: { select: { name: true } } },
-  });
-
-  const SITE_URL = process.env.NEXTAUTH_URL || 'https://anichin.id';
-
-  const reviewObjects = reviews.map(r => ({
-    "@type": "Review",
-    "author": { "@type": "Person", "name": r.user.name || 'Anonim' },
-    "datePublished": r.createdAt.toISOString().split('T')[0],
-    "reviewRating": {
-      "@type": "Rating",
-      "ratingValue": r.rating,
-      "bestRating": 10,
-      "worstRating": 1,
-    },
-    "reviewBody": r.comment.slice(0, 300),
-  }));
-
-  const aggregateRating = {
-    "@type": "AggregateRating",
-    "ratingValue": anime.score,
-    "bestRating": 10,
-    "worstRating": 0,
-    "ratingCount": reviewCount > 0 ? reviewCount : 1,
-  };
-
-  const creativeWork = {
-    "@context": "https://schema.org",
-    "@type": ["TVSeries", "CreativeWork"],
-    "name": anime.title,
-    "alternateName": [anime.titleEn, anime.titleJp].filter(Boolean),
-    "url": `${SITE_URL}/?anime=${anime.slug}`,
-    "image": anime.poster,
-    "description": anime.synopsis,
-    "genre": anime.genres.map(g => g.genre.name),
-    ...(anime.studio ? { "creator": { "@type": "Organization", "name": anime.studio } } : {}),
-    ...(anime.releasedYear ? { "datePublished": String(anime.releasedYear) } : {}),
-    "aggregateRating": aggregateRating,
-    ...(reviewObjects.length > 0 ? { "review": reviewObjects } : {}),
-    // VideoObject for episodes (Google video rich results)
-    "containsSeason": {
-      "@type": "CreativeWorkSeason",
-      "name": `${anime.title} - Season 1`,
-    },
-  };
-
-  const breadcrumb = {
-    "@context": "https://schema.org",
-    "@type": "BreadcrumbList",
-    "itemListElement": [
-      { "@type": "ListItem", "position": 1, "name": "Beranda", "item": SITE_URL },
-      { "@type": "ListItem", "position": 2, "name": "Anime List", "item": `${SITE_URL}/#list` },
-      { "@type": "ListItem", "position": 3, "name": anime.title, "item": `${SITE_URL}/?anime=${anime.slug}` },
-    ],
-  };
-
-  return NextResponse.json({ creativeWork, breadcrumb }, {
-    headers: { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300' },
-  });
 }

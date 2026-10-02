@@ -84,6 +84,15 @@ function buildCSP(nonce: string): string {
   ].join('; ');
 }
 
+/**
+ * Locale yang direpresentasikan URL — dipakai root layout untuk `<html lang>`
+ * dan provider i18n untuk render pertama. Hanya locale yang punya kamus
+ * (src/lib/i18n.ts) yang boleh muncul di sini.
+ */
+function localeForPath(pathname: string): 'id' | 'en' {
+  return pathname === '/en' || pathname.startsWith('/en/') ? 'en' : 'id';
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -127,12 +136,15 @@ export async function proxy(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set('x-nonce', nonce);
   requestHeaders.set('Content-Security-Policy', csp);
+  // Dibaca root layout (src/app/layout.tsx) untuk `<html lang="…">`.
+  requestHeaders.set('x-locale', localeForPath(pathname));
 
   // Get the response from the route handler
   const response = NextResponse.next({ request: { headers: requestHeaders } });
 
   // Keep the nonce available to our own server components (e.g. JSON-LD blocks)
   response.headers.set('x-nonce', nonce);
+  response.headers.set('Content-Language', localeForPath(pathname));
 
   // Apply security headers
   applySecurityHeaders(response, nonce);
@@ -209,12 +221,17 @@ export const config = {
   // Apply to all routes except static assets (which are handled by Next.js CDN)
   matcher: [
     /*
-     * Match all request paths except:
-     * - _next/static (static files)
-     * - _next/image (image optimization)
+     * Match semua path KECUALI:
+     * - _next/static, _next/image (aset build)
      * - favicon.ico, logo.svg, robots.txt, sitemap.xml
-     * - public folder assets
+     * - berkas gambar di public/anime/*.svg|png|… (poster & banner)
+     *
+     * CATATAN PENTING: sebelumnya pola ini mengecualikan SELURUH prefix
+     * `anime/`, sehingga halaman kanonik `/anime/<slug>` tidak pernah melewati
+     * proxy → tidak dapat security header, dan tidak dapat nonce CSP (script
+     * JSON-LD kehilangan nonce-nya). Sekarang hanya berkas berekstensi gambar
+     * yang dikecualikan, bukan route halamannya.
      */
-    '/((?!_next/static|_next/image|favicon.ico|logo.svg|robots.txt|sitemap.xml|anime/).*)',
+    '/((?!_next/static|_next/image|favicon.ico|logo.svg|robots.txt|sitemap.xml|anime/[^/]+\\.(?:svg|png|jpe?g|webp|avif|gif|ico)$).*)',
   ],
 };

@@ -1,6 +1,7 @@
 'use client';
 
 import Image from 'next/image';
+import { needsUnoptimized } from '@/lib/image-hosts';
 import { AnimeImage } from './anime-image';
 import { useState, useEffect, useCallback } from 'react';
 import { Play, Star, Calendar, Clock, ChevronLeft, ChevronRight, Info, Bookmark, BookmarkCheck } from 'lucide-react';
@@ -118,6 +119,8 @@ function Slide({ anime, active, isLCP }: { anime: AnimeCardData; active: boolean
         fill
         priority={isLCP}
         sizes="100vw"
+        // Host di luar whitelist optimizer: tampilkan langsung dari sumbernya.
+        unoptimized={needsUnoptimized(anime.banner || anime.poster)}
         className="h-full w-full object-cover scale-105"
         style={{
           transform: active ? 'scale(1.05)' : 'scale(1.12)',

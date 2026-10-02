@@ -1,55 +1,26 @@
-import { checkRateLimit } from '@/lib/rate-limit';
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { checkRateLimit } from '@/lib/rate-limit';
+import { getLatestEpisodes } from '@/lib/data/home';
 
-// Cache for 2 minutes
-export const revalidate = 120;
-
+/**
+ * Riwayat rilisan episode (paginasi).
+ *
+ * Logika query ada di `src/lib/data/home.ts` (dipakai bersama prefetch RSC
+ * homepage) dan di-cache `unstable_cache` — route ini hanya menangani rate
+ * limit + bentuk respons HTTP.
+ */
 export async function GET(req: NextRequest) {
+  const limited = await checkRateLimit(req, 'read');
+  if (limited) return limited;
+
   try {
-    // --- Rate limiting ---
-    const limited = await checkRateLimit(req, 'read');
-    if (limited) return limited;
     const { searchParams } = new URL(req.url);
     const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
     const limit = Math.min(60, Math.max(1, parseInt(searchParams.get('limit') || '24', 10)));
 
-    const [episodes, total] = await Promise.all([
-      db.episode.findMany({
-        orderBy: { releasedAt: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
-        include: { anime: true },
-      }),
-      db.episode.count(),
-    ]);
-
-    return NextResponse.json({
-      episodes: episodes.map(e => ({
-        id: e.id,
-        number: e.number,
-        title: e.title,
-        thumbnail: e.thumbnail,
-        duration: e.duration,
-        releasedAt: e.releasedAt,
-        views: e.views,
-        streamUrl: e.streamUrl,
-        anime: {
-          slug: e.anime.slug,
-          title: e.anime.title,
-          titleJp: e.anime.titleJp,
-          poster: e.anime.poster,
-          type: e.anime.type,
-          status: e.anime.status,
-          releasedEpisodes: e.anime.releasedEpisodes,
-        },
-      })),
-      total,
-      page,
-      totalPages: Math.ceil(total / limit),
-    });
+    return NextResponse.json(await getLatestEpisodes(page, limit));
   } catch (_e) {
-    // Don't leak internal error details to client
+    // Jangan bocorkan detail error internal ke client
     return NextResponse.json({ error: 'Internal server error. Please try again.' }, { status: 500 });
   }
 }

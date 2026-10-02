@@ -1,18 +1,15 @@
+import 'dotenv/config';
 import { defineConfig } from 'prisma/config';
 
 /**
  * Prisma CLI configuration.
  *
- * NOTE on environment variables: this config file does NOT load `.env` by
- * itself (there is no dotenv import here). Prisma's CLI still reads a `.env`
- * next to the schema/package root for most commands, but if a command reports
- * `Environment variable not found: DATABASE_URL`, export it explicitly first:
- *
- *   set -a && . ./.env && set +a        # bash
- *   bunx prisma migrate deploy
- *
- * (Prisma 7 will require `import 'dotenv/config'` here — the `dotenv` package is
- * already available transitively, and will become a direct dependency then.)
+ * NOTE on environment variables: begitu ada file ini, Prisma CLI BERHENTI
+ * memuat `.env` secara otomatis ("Prisma config detected, skipping environment
+ * variable loading"), sehingga `DATABASE_URL` harus tersedia di environment.
+ * `import 'dotenv/config'` di bawah memuat `.env` untuk pemakaian lokal,
+ * sementara container/CI tetap bisa mengirim env var langsung (nilai env yang
+ * sudah ada tidak ditimpa dotenv).
  */
 export default defineConfig({
   schema: 'prisma/schema.prisma',

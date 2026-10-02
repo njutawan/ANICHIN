@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { checkRateLimit, addRateLimitHeaders } from '@/lib/rate-limit';
 import { auditLog } from '@/lib/audit-log';
+import { getClientIp } from '@/lib/ip';
 
 // Cache for 2 minutes — anime detail doesn't change often
 export const revalidate = 120;
@@ -10,16 +11,16 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ slug
   try {
     const limited = await checkRateLimit(req, 'read');
     if (limited) {
-      const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-      auditLog.rateLimitHit(ip, '/api/anime/[slug]', 'read');
+      const ip = getClientIp(req);
+      await auditLog.rateLimitHit(ip, '/api/anime/[slug]', 'read');
       return limited;
     }
 
     const { slug } = await params;
     const safeSlug = slug.replace(/[^a-z0-9-]/gi, '').slice(0, 100);
     if (!safeSlug || safeSlug !== slug) {
-      auditLog.suspiciousRequest(
-        req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown',
+      await auditLog.suspiciousRequest(
+        getClientIp(req),
         `/api/anime/${slug}`,
         'path_traversal'
       );
@@ -119,7 +120,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ slug
 
     return addRateLimitHeaders(NextResponse.json(responseBody), 'read');
   } catch {
-    auditLog.apiError('/api/anime/[slug]', 'GET', 500, 'Database query failed');
+    await auditLog.apiError('/api/anime/[slug]', 'GET', 500, 'Database query failed');
     return NextResponse.json({ error: 'Internal server error. Please try again.' }, { status: 500 });
   }
 }

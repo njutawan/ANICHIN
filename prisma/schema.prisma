@@ -57,6 +57,7 @@ model Anime {
   @@index([views])
   @@index([releasedYear])
   @@index([createdAt])
+  @@index([updatedAt]) // /api/anime sort=latest + sitemap orderBy updatedAt
 }
 
 // Self-referencing many-to-many: Sequel/Prequel/SideStory/Alternative
@@ -234,7 +235,7 @@ model ServerReview {
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([animeSlug])
+  @@index([animeSlug, createdAt]) // daftar ulasan per anime (ORDER BY createdAt DESC)
   @@index([userId])
 }
 
@@ -250,6 +251,6 @@ model ServerComment {
 
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([animeSlug, episodeNumber])
+  @@index([animeSlug, episodeNumber, createdAt]) // komentar per episode (ORDER BY createdAt DESC)
   @@index([userId])
 }

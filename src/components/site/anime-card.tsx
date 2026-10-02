@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { Play, Star, Eye, Clock, Bookmark, BookmarkCheck } from 'lucide-react';
 import { toast } from 'sonner';
 import { useUIStore } from '@/lib/store';
@@ -9,6 +10,7 @@ import { formatViews, timeAgo, type AnimeCardData, type EpisodeData } from '@/li
 import { useMounted } from '@/hooks/use-mounted';
 import { AnimeImage } from './anime-image';
 import { useI18n } from '@/lib/i18n-context';
+import { animePath } from '@/lib/site';
 
 interface AnimeCardProps {
   anime: AnimeCardData;
@@ -43,10 +45,31 @@ export function AnimeCard({ anime, className, showRank, featured = false }: Anim
     }
   };
 
+  // Klik biasa → buka modal cepat (UX lama, tanpa pindah halaman).
+  // Ctrl/Cmd/Shift+klik atau klik tengah → biarkan browser membuka halaman
+  // kanonik `/anime/<slug>` di tab baru (link-nya nyata, jadi crawler juga
+  // bisa mengikuti). Sebelumnya kartu bukan anchor sama sekali sehingga tidak
+  // ada jalur internal link menuju halaman anime.
+  const isModifiedClick = (e: React.MouseEvent) =>
+    e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0;
+
+  const onLinkClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    if (isModifiedClick(e)) return; // biarkan browser buka tab baru
+    e.preventDefault(); // cegah navigasi next/link (defaultPrevented dibaca Link)
+    openDetail(anime.slug);
+  };
+
+  const onCardClick = (e: React.MouseEvent<HTMLElement>) => {
+    if (e.defaultPrevented) return; // sudah ditangani onClick pada <Link>
+    if (isModifiedClick(e)) return;
+    e.preventDefault();
+    openDetail(anime.slug);
+  };
+
   return (
     <article
       className={cn('group cursor-pointer animate-scale-in flex flex-col h-full', className)}
-      onClick={() => openDetail(anime.slug)}
+      onClick={onCardClick}
     >
       <div className="relative aspect-[2/3] rounded-lg overflow-hidden border border-border/60 bg-card transition-all duration-300 group-hover:border-brand/60 group-hover:shadow-xl group-hover:shadow-brand/10 group-hover:-translate-y-1">
         <AnimeImage src={anime.poster}
@@ -143,7 +166,9 @@ export function AnimeCard({ anime, className, showRank, featured = false }: Anim
           'font-semibold leading-tight line-clamp-2 group-hover:text-amber-400 transition-colors min-h-[2.5rem]',
           featured ? 'text-base' : 'text-sm'
         )}>
-          {anime.title}
+          <Link href={animePath(anime.slug)} onClick={onLinkClick} className="hover:underline focus-visible:underline">
+            {anime.title}
+          </Link>
         </h3>
         {anime.titleJp && (
           <p className="text-xs text-foreground/70 line-clamp-1 mt-0.5 min-h-[1rem]">{anime.titleJp}</p>

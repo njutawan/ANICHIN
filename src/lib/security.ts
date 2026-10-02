@@ -53,10 +53,35 @@ export function sanitizeUrl(url: string | undefined | null): string {
 
 /**
  * Truncate text to prevent DoS via extremely long inputs.
+ *
+ * Memotong per code point (bukan per code unit) supaya emoji / karakter
+ * non-BMP tidak terbelah menjadi surrogate pair yang rusak.
  */
 function truncateInput(input: string, maxLength: number = 500): string {
   if (!input) return '';
-  return input.slice(0, maxLength);
+  if (input.length <= maxLength) return input;
+  return Array.from(input).slice(0, maxLength).join('');
+}
+
+/**
+ * Sanitize free-form user text (komentar, ulasan) untuk disimpan di database.
+ *
+ * - membuang null byte & karakter kontrol (bisa merusak log/JSON/terminal),
+ * - membuang zero-width char (dipakai untuk menyamarkan kata terlarang),
+ * - membuang tag HTML (defense in depth; React tetap meng-escape saat render),
+ * - truncate per code point dengan batas yang sama seperti yang divalidasi.
+ *
+ * PENTING: batas `maxLength` harus sama dengan batas validasi route, supaya
+ * input yang lolos validasi tidak diam-diam terpotong lagi saat disimpan.
+ */
+export function sanitizeUserText(input: string, maxLength: number): string {
+  if (!input) return '';
+  const cleaned = input
+    .replace(/\u0000/g, '')
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+    .replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .replace(/<[^>]*>/g, '');
+  return truncateInput(cleaned.trim(), maxLength);
 }
 
 /**

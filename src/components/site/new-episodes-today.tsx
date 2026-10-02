@@ -5,18 +5,20 @@ import { useQuery } from '@tanstack/react-query';
 import { Flame } from 'lucide-react';
 import { EpisodeCard } from './anime-card';
 import { SectionHeading } from './latest-updates';
-import type { EpisodeData } from '@/lib/types';
+import type { EpisodeData, TodayPayload } from '@/lib/types';
+import { homeQueryKeys } from '@/lib/queries/home';
 
-export function NewEpisodesToday() {
+export function NewEpisodesToday({ initialData }: { initialData?: TodayPayload } = {}) {
   const { t } = useI18n();
   const { data, isLoading } = useQuery({
-    queryKey: ['today-episodes'],
+    queryKey: homeQueryKeys.today,
     queryFn: async () => {
       const res = await fetch('/api/today');
       if (!res.ok) throw new Error('today');
       return res.json();
     },
     staleTime: 5 * 60_000,
+    initialData,
   });
 
   const episodes: EpisodeData[] = data?.episodes ?? [];

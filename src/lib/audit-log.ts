@@ -13,8 +13,9 @@
 
 import { logger } from '@/lib/logger';
 import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
-import { createHash } from 'crypto';
+import { createHmac, randomBytes } from 'crypto';
 
 type LogLevel = 'info' | 'warn' | 'error' | 'critical';
 
@@ -58,56 +59,99 @@ if (!isServerless) {
 const logs: LogEntry[] = [];
 const MAX_LOGS = 5000;
 
-/**
- * SHA-256 hash of IP address — irreversible, privacy-safe.
- * Cannot reverse the hash to get the original IP.
- */
-function hashIp(ip: string): string {
-  return createHash('sha256').update(ip).digest('hex').slice(0, 16);
+// Serial write queue — keeps file writes ordered and off the request path.
+let writeQueue: Promise<void> = Promise.resolve();
+
+// ── IP hashing salt ──
+// SHA-256 tanpa salt TIDAK privacy-safe untuk IP: ruang IPv4 hanya 2^32, jadi
+// seluruh tabel bisa di-brute-force dalam hitungan menit di GPU. HMAC dengan
+// salt rahasia membuat hash tidak bisa dibalik tanpa salt.
+// Set IP_HASH_SALT di produksi. Bila kosong, dipakai salt acak per-proses
+// (hash tetap tidak reversibel, tapi berubah tiap restart — korelasi lintas
+// restart hilang, jadi tetap set env-nya bila butuh analisis jangka panjang).
+let ipHashSaltPromise: Promise<string> | null = null;
+let ephemeralSaltWarned = false;
+
+async function getIpHashSalt(): Promise<string> {
+  if (!ipHashSaltPromise) {
+    const configured = process.env.IP_HASH_SALT;
+    if (configured && configured.length >= 16) {
+      ipHashSaltPromise = Promise.resolve(configured);
+    } else {
+      if (process.env.NODE_ENV === 'production' && !ephemeralSaltWarned) {
+        ephemeralSaltWarned = true;
+        logger.warn(
+          '[audit] IP_HASH_SALT not set — using a random per-process salt. ' +
+            'Set IP_HASH_SALT for stable, non-reversible IP hashing.'
+        );
+      }
+      ipHashSaltPromise = Promise.resolve(randomBytes(32).toString('hex'));
+    }
+  }
+  return ipHashSaltPromise;
 }
 
 /**
- * Rotate log file if it exceeds max size.
+ * HMAC-SHA256 of an IP address, keyed with a secret salt.
+ * Irreversible (tanpa salt) dan privacy-safe. Output 16 hex chars.
+ */
+async function hashIp(ip: string): Promise<string> {
+  const salt = await getIpHashSalt();
+  return createHmac('sha256', salt).update(ip).digest('hex').slice(0, 16);
+}
+
+/**
+ * Rotate log file if it exceeds max size (async — lihat appendToFile).
  * Skipped on serverless (no filesystem writes).
  */
-function rotateIfNeeded() {
+async function rotateIfNeeded() {
   if (isServerless) return;
   try {
-    if (fs.existsSync(LOG_FILE)) {
-      const stats = fs.statSync(LOG_FILE);
-      if (stats.size > MAX_FILE_SIZE) {
-        // Move old file to .old
-        if (fs.existsSync(OLD_LOG_FILE)) {
-          fs.unlinkSync(OLD_LOG_FILE);
-        }
-        fs.renameSync(LOG_FILE, OLD_LOG_FILE);
-      }
+    const stats = await fsp.stat(LOG_FILE);
+    if (stats.size > MAX_FILE_SIZE) {
+      // Move old file to .old
+      await fsp.rm(OLD_LOG_FILE, { force: true });
+      await fsp.rename(LOG_FILE, OLD_LOG_FILE);
     }
   } catch {
-    // Ignore rotation errors
+    // Ignore rotation errors (file may not exist yet)
   }
 }
 
 /**
  * Append a log entry to file (JSON Lines format).
- * Non-blocking — uses writeFileSync in try/catch.
+ *
+ * Non-blocking: memakai `fs.promises.appendFile` + antrean serial, sehingga
+ * tidak ada `appendFileSync` di jalur request (sebelumnya setiap rate-limit
+ * hit / API error memblokir event loop). Antrean menjaga urutan penulisan dan
+ * mencegah penulisan bersamaan ke file yang sama.
+ *
  * SKIPPED on serverless (Vercel has read-only filesystem).
  */
 function appendToFile(entry: LogEntry) {
   if (isServerless) return;
-  try {
-    rotateIfNeeded();
-    fs.appendFileSync(LOG_FILE, JSON.stringify(entry) + '\n', 'utf-8');
-  } catch {
-    // File write may fail — log to console as fallback (already done below)
-  }
+
+  // Rotasi juga async supaya tidak ada statSync/renameSync di event loop.
+  writeQueue = writeQueue
+    .then(async () => {
+      await rotateIfNeeded();
+      await fsp.appendFile(LOG_FILE, JSON.stringify(entry) + '\n', 'utf-8');
+    })
+    .catch(() => {
+      // File write may fail — log to console as fallback (already done below)
+    });
 }
 
-function log(entry: Omit<LogEntry, 'timestamp'>) {
+async function log(entry: Omit<LogEntry, 'timestamp'>) {
   const fullEntry: LogEntry = {
     ...entry,
     timestamp: new Date().toISOString(),
   };
+
+  // Salted hash — hanya untuk event yang membawa IP.
+  if (fullEntry.ipHash) {
+    fullEntry.ipHash = await hashIp(fullEntry.ipHash);
+  }
 
   // Add to in-memory buffer (works everywhere, but ephemeral on serverless)
   logs.push(fullEntry);
@@ -131,19 +175,19 @@ function log(entry: Omit<LogEntry, 'timestamp'>) {
 }
 
 export const auditLog = {
-  rateLimitHit(ip: string, route: string, type: string) {
-    log({
+  async rateLimitHit(ip: string, route: string, type: string) {
+    await log({
       level: 'warn',
       event: 'RATE_LIMIT_EXCEEDED',
       route,
-      ipHash: hashIp(ip),
+      ipHash: ip, // di-hash (HMAC + salt) di dalam log()
       message: `Rate limit exceeded for ${type}`,
       metadata: { limitType: type },
     });
   },
 
-  apiError(route: string, method: string, statusCode: number, sanitizedMessage: string) {
-    log({
+  async apiError(route: string, method: string, statusCode: number, sanitizedMessage: string) {
+    await log({
       level: statusCode >= 500 ? 'error' : 'warn',
       event: 'API_ERROR',
       route,
@@ -153,19 +197,19 @@ export const auditLog = {
     });
   },
 
-  suspiciousRequest(ip: string, route: string, pattern: string) {
-    log({
+  async suspiciousRequest(ip: string, route: string, pattern: string) {
+    await log({
       level: 'critical',
       event: 'SUSPICIOUS_REQUEST',
       route,
-      ipHash: hashIp(ip),
+      ipHash: ip, // di-hash (HMAC + salt) di dalam log()
       message: `Potential ${pattern} detected`,
       metadata: { pattern },
     });
   },
 
-  notFound(route: string, method: string) {
-    log({
+  async notFound(route: string, method: string) {
+    await log({
       level: 'info',
       event: 'NOT_FOUND',
       route,

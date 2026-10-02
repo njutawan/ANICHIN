@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Image from 'next/image';
+import { isRemoteImageSrc, needsUnoptimized } from '@/lib/image-hosts';
 
 interface AnimeImageProps {
   src: string;
@@ -37,9 +38,30 @@ function generateFallbackSvg(title: string): string {
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
 }
 
+/**
+ * Next.js image optimizer MENOLAK SVG ("image type is not allowed" → HTTP 400)
+ * kecuali `images.dangerouslyAllowSVG` diaktifkan. Poster/banner katalog ini
+ * berupa SVG, jadi tanpa penanganan khusus semua poster gagal dimuat dan hanya
+ * menampilkan fallback gradient.
+ *
+ * Solusi: SVG (dan data-URI) disajikan langsung dengan `unoptimized` — tidak
+ * lewat optimizer, sehingga tidak perlu mengaktifkan dangerouslyAllowSVG
+ * (yang membuka risiko XSS lewat SVG dari host eksternal).
+ *
+ * P1-5: gambar remote dari host di luar whitelist (`images.remotePatterns`)
+ * juga disajikan langsung. Kalau tetap dilewatkan optimizer, Next menjawab
+ * HTTP 400 dan poster admin yang memakai CDN lain akan hilang; dengan begini
+ * gambar tetap tampil, tetapi server kita tidak pernah mengunduhnya.
+ */
+function isUnoptimizable(src: string): boolean {
+  if (src.startsWith('data:') || /\.svg(\?|#|$)/i.test(src)) return true;
+  return isRemoteImageSrc(src) && needsUnoptimized(src);
+}
+
 export function AnimeImage({ src, alt, className, width, height, fill, sizes, priority }: AnimeImageProps) {
   const [error, setError] = useState(false);
   const [fallbackSrc] = useState(() => generateFallbackSvg(alt));
+  const unoptimized = isUnoptimizable(src);
 
   if (error) {
     // Use regular img for fallback (data URI doesn't need optimization)
@@ -63,6 +85,7 @@ export function AnimeImage({ src, alt, className, width, height, fill, sizes, pr
         sizes={sizes || '(max-width: 768px) 50vw, (max-width: 1200px) 20vw, 16vw'}
         className={className}
         priority={priority}
+        unoptimized={unoptimized}
         onError={() => setError(true)}
       />
     );
@@ -76,6 +99,7 @@ export function AnimeImage({ src, alt, className, width, height, fill, sizes, pr
       height={height || 600}
       className={className}
       priority={priority}
+      unoptimized={unoptimized}
       onError={() => setError(true)}
     />
   );
