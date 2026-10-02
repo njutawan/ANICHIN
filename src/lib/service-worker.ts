@@ -1,4 +1,36 @@
 /**
+ * AniChin Service Worker — sumber skrip `/sw.js`.
+ *
+ * P2: sebelumnya `public/sw.js` menyimpan `CACHE_VERSION = 'anichin-v1'` yang
+ * di-bump **manual**; lupa bump = pengguna tertahan aset lama. Sekarang versi
+ * disuntikkan saat build dari `NEXT_PUBLIC_BUILD_ID` (commit SHA, lihat
+ * `next.config.ts`) lewat route handler `src/app/sw.js/route.ts`, jadi setiap
+ * deploy otomatis membuang cache lama.
+ *
+ * Catatan format: isi SW disimpan sebagai template literal, karena itu sengaja
+ * **tidak memakai backtick/`${}`** di dalamnya (pakai konkatenasi `+`) supaya
+ * tidak perlu escaping. Placeholder `__CACHE_VERSION__` diganti
+ * `buildServiceWorkerScript()`.
+ */
+
+export const CACHE_VERSION_PLACEHOLDER = '__CACHE_VERSION__';
+
+/** Bersihkan build id supaya tidak bisa menyuntik kode ke dalam skrip SW. */
+export function sanitizeBuildId(buildId: string | undefined | null): string {
+  const cleaned = (buildId ?? '').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 64);
+  return cleaned.length > 0 ? cleaned : 'dev';
+}
+
+/**
+ * Bangun isi `/sw.js` dengan versi cache dari build id.
+ * Setiap deploy (SHA berbeda) otomatis meng-invalidasi cache lama.
+ */
+export function buildServiceWorkerScript(buildId: string | undefined | null): string {
+  return SERVICE_WORKER_SOURCE.replace(CACHE_VERSION_PLACEHOLDER, 'anichin-' + sanitizeBuildId(buildId));
+}
+
+const SERVICE_WORKER_SOURCE = `
+/**
  * AniChin Service Worker — PWA offline support + cache strategy.
  *
  * Caching strategy:
@@ -8,13 +40,14 @@
  * - API POST/mutations: Network-only (never cache)
  * - Fonts: Cache-first, long TTL
  *
- * Versioning: bump CACHE_VERSION on deploy to invalidate old caches.
+ * Versioning: CACHE_VERSION disuntikkan saat build (commit SHA) — jangan
+ * di-edit manual. Cache lama otomatis dihapus di event 'activate'.
  */
 
-const CACHE_VERSION = 'anichin-v1';
-const STATIC_CACHE = `${CACHE_VERSION}-static`;
-const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
-const API_CACHE = `${CACHE_VERSION}-api`;
+const CACHE_VERSION = '__CACHE_VERSION__';
+const STATIC_CACHE = CACHE_VERSION + '-static';
+const RUNTIME_CACHE = CACHE_VERSION + '-runtime';
+const API_CACHE = CACHE_VERSION + '-api';
 
 // Assets to precache on install (app shell)
 const PRECACHE_URLS = ['/', '/offline', '/logo.svg', '/manifest.webmanifest'];
@@ -38,7 +71,7 @@ self.addEventListener('activate', (event) => {
       .then((keys) =>
         Promise.all(
           keys
-            .filter((key) => !key.startsWith(CACHE_VERSION))
+            .filter((key) => key.indexOf(CACHE_VERSION) !== 0)
             .map((key) => caches.delete(key))
         )
       )
@@ -47,7 +80,7 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  const { request } = event;
+  const request = event.request;
 
   // Skip non-GET requests (mutations never cached)
   if (request.method !== 'GET') return;
@@ -67,10 +100,10 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Skip auth endpoints (never cache — security)
-  if (url.pathname.startsWith('/api/auth/')) return;
+  if (url.pathname.indexOf('/api/auth/') === 0) return;
 
   // Skip Next.js HMR in dev
-  if (url.pathname.startsWith('/_next/webpack-hmr')) return;
+  if (url.pathname.indexOf('/_next/webpack-hmr') === 0) return;
 
   // --- Route by request destination ---
   // 1. Navigation (HTML pages) — network-first with offline fallback
@@ -81,8 +114,8 @@ self.addEventListener('fetch', (event) => {
 
   // 2. Static assets (_next/static) — cache-first (immutable)
   if (
-    url.pathname.startsWith('/_next/static/') ||
-    url.pathname.startsWith('/_next/image')
+    url.pathname.indexOf('/_next/static/') === 0 ||
+    url.pathname.indexOf('/_next/image') === 0
   ) {
     event.respondWith(cacheFirst(request, STATIC_CACHE, 365 * 24 * 60 * 60));
     return;
@@ -95,11 +128,11 @@ self.addEventListener('fetch', (event) => {
   }
 
   // 4. API GET endpoints — network-first with short cache
-  if (url.pathname.startsWith('/api/')) {
+  if (url.pathname.indexOf('/api/') === 0) {
     // Don't cache /api/auth, /api/health, /api/analytics
     if (
-      url.pathname.startsWith('/api/health') ||
-      url.pathname.startsWith('/api/analytics')
+      url.pathname.indexOf('/api/health') === 0 ||
+      url.pathname.indexOf('/api/analytics') === 0
     ) {
       return; // Network-only
     }
@@ -191,3 +224,4 @@ self.addEventListener('message', (event) => {
     self.skipWaiting();
   }
 });
+`;

@@ -114,11 +114,12 @@ interface UIState {
   likeReview: (id: string) => void;
   deleteReview: (id: string) => void;
 
-  // Episode comments (persisted)
+  // Episode comments — jejak lokal untuk pencapaian (AchievementsWidget).
+  // Daftar komentar yang tampil di modal datang dari `/api/comments`, BUKAN
+  // dari sini: sebelumnya array inilah satu-satunya penyimpanan, sehingga
+  // komentar tidak pernah terlihat pengguna lain.
   episodeComments: EpisodeCommentItem[];
   addEpisodeComment: (c: Omit<EpisodeCommentItem, 'id' | 'createdAt' | 'likes'>) => void;
-  likeEpisodeComment: (id: string) => void;
-  deleteEpisodeComment: (id: string) => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -239,14 +240,6 @@ export const useUIStore = create<UIState>()(
             ...s.episodeComments,
           ].slice(0, 1000),
         })),
-      likeEpisodeComment: (id) =>
-        set((s) => ({
-          episodeComments: s.episodeComments.map((c) =>
-            c.id === id ? { ...c, likes: c.likes + 1 } : c
-          ),
-        })),
-      deleteEpisodeComment: (id) =>
-        set((s) => ({ episodeComments: s.episodeComments.filter((c) => c.id !== id) })),
     }),
     {
       name: 'anichin-ui',

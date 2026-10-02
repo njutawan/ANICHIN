@@ -1,7 +1,7 @@
 # ============================================================================
 # AniChin — CI Pipeline
 # Triggered on: push (main/develop), PR to main
-# Jobs: quality (lint+type) → build → security scan → test → docker build
+# Jobs: quality (lint+type) → build → security scan → test → e2e → docker build
 #
 # NOTE: the Prisma schema is provider="postgresql", so every job that talks to
 # the database spins up a real PostgreSQL service (SQLite URLs silently break
@@ -249,6 +249,81 @@ jobs:
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v3
         continue-on-error: true
+
+  # ── Job 6: E2E (Playwright) ────────────────────────────────
+  # Build produksi + browser sungguhan terhadap PostgreSQL yang sudah di-seed.
+  # Menutup celah "belum ada test E2E" (P1-11/P2).
+  e2e:
+    name: 🎭 E2E (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: quality
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: anichin
+          POSTGRES_PASSWORD: anichin
+          POSTGRES_DB: anichin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U anichin -d anichin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            .next/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: bun run db:generate
+        env:
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
+
+      - name: Push DB schema + seed
+        run: |
+          bun run db:push
+          bun run seed
+        env:
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
+
+      - name: Install Playwright browser
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run E2E suite
+        run: bunx playwright test
+        env:
+          # Alur komentar lintas pengguna butuh data (lihat e2e/comments.spec.ts).
+          E2E_WITH_DB: '1'
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
+          NEXTAUTH_SECRET: ${{ env.CI_NEXTAUTH_SECRET }}
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
 
   # ── Job 5: Docker build (verify image builds) ─────────────
   docker-build:

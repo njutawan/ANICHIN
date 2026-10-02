@@ -18,6 +18,7 @@ import { BottomNav } from '@/components/site/bottom-nav';
 import { AnimeImage } from '@/components/site/anime-image';
 import { AnimePageActions } from '@/components/site/anime-page-actions';
 import { AnimeEpisodeList } from '@/components/site/anime-episode-list';
+import { LazyModals } from '@/components/site/modal-lazy';
 
 /**
  * Halaman detail anime — route KANONIK yang bisa diindeks mesin pencari.
@@ -350,6 +351,13 @@ export default async function AnimeDetailPage({
 
       <Footer />
       <BottomNav />
+
+      {/*
+        Modal player + komentar. Sebelumnya hanya dipasang di beranda, sehingga
+        tombol "Tonton Sekarang" di halaman ini mengubah state store tanpa ada
+        yang merender modalnya (player & komentar tidak pernah terbuka).
+      */}
+      <LazyModals />
     </div>
   );
 }

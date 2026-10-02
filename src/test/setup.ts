@@ -12,3 +12,15 @@ vi.mock('next/cache', () => ({
   revalidatePath: () => {},
   revalidateTag: () => {},
 }));
+
+// jsdom tidak menyediakan ResizeObserver, sementara beberapa komponen Radix
+// (mis. @radix-ui/react-scroll-area di modal komentar) memakainya di layout
+// effect → ReferenceError saat render. Stub no-op sudah cukup untuk unit test.
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
+}

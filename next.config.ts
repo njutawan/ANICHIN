@@ -1,5 +1,25 @@
 import type { NextConfig } from "next";
+import { execSync } from "node:child_process";
 import { resolveImageRemotePatterns } from "./src/lib/image-hosts";
+
+/**
+ * P2: id build untuk versi cache service worker (`/sw.js`).
+ * Urutan: env eksplisit (CI/Vercel) → commit SHA → timestamp (mis. build dari
+ * arsip tanpa `.git`). Dipakai `src/app/sw.js/route.ts` lewat `env` di bawah.
+ */
+function resolveBuildId(): string {
+  const fromEnv = process.env.NEXT_PUBLIC_BUILD_ID;
+  if (fromEnv) return fromEnv;
+  try {
+    return (
+      execSync("git rev-parse --short HEAD", { stdio: ["ignore", "pipe", "ignore"] })
+        .toString()
+        .trim() || "dev"
+    );
+  } catch {
+    return `t${Date.now()}`;
+  }
+}
 
 // Detect Vercel deployment (Vercel sets VERCEL=1 env var automatically)
 const isVercel = process.env.VERCEL === "1";
@@ -26,6 +46,11 @@ const nextConfig: NextConfig = {
       { source: '/ja/:path*', destination: '/:path*', permanent: true },
     ];
   },
+  /**
+   * Nilai ini di-inline saat build (juga tersedia di browser), dipakai untuk
+   * versi cache service worker. Ganti tidak perlu — otomatis dari commit.
+   */
+  env: { NEXT_PUBLIC_BUILD_ID: resolveBuildId() },
   reactStrictMode: true,
   poweredByHeader: false,
   productionBrowserSourceMaps: false,

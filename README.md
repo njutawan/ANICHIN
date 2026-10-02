@@ -229,7 +229,8 @@ di-baseline sekali dengan `npx prisma migrate resolve --applied 20261001000000_i
 | `db:migrate`          | `bun run db:migrate`                                | Prisma Migrate (dev mode, buat migration baru)         |
 | `db:reset`            | `bun run db:reset`                                  | Reset database + jalankan ulang semua migration       |
 | `seed`                | `bun run seed`                                      | Seed 24 anime + 22 genre + 223 episode                 |
-| `test`                | `bun run test` / `npm test`                         | Unit test Vitest (24 file / 239 test)                  |
+| `test`                | `bun run test` / `npm test`                         | Unit test Vitest (28 file / 266 test)                  |
+| `test:e2e`            | `bun run test:e2e`                                  | E2E Playwright (build produksi + browser)              |
 | `db:migrate:prod`     | `bun run db:migrate:prod`                           | `prisma generate` + `prisma migrate deploy` (produksi) |
 | `db:migrate:status`   | `bun run db:migrate:status`                         | Cek status migration terhadap database                 |
 | `healthcheck`         | `bun run healthcheck`                               | Cek `/api/health` di localhost:3000                    |
@@ -480,9 +481,40 @@ File `src/lib/audit-log.ts` menulis event ke `logs/audit.jsonl`:
 | **Sitemap.xml** (auto)           | `src/app/sitemap.ts`          | Static + dynamic anime pages, revalidate 1 jam        |
 | **Robots.txt**                   | `src/app/robots.ts`           | Allow `/`, disallow `/api/`, sitemap reference         |
 | **PWA Manifest**                 | `src/app/manifest.ts`         | name, icons (192/512), shortcuts, theme_color          |
+| **Service worker**               | `src/app/sw.js/route.ts`      | Cache PWA; `CACHE_VERSION` otomatis = commit SHA build  |
 | **JSON-LD structured data**      | `src/components/site/structured-data.tsx` | Schema.org VideoObject + BreadcrumbList     |
 | **Open Graph + Twitter Card**    | `src/app/layout.tsx`          | og:image, og:title, og:description, twitter:card      |
 | **Canonical URLs**               | `src/app/layout.tsx`          | Mencegah duplicate content                             |
+
+---
+
+## Testing E2E (Playwright)
+
+```bash
+# Sekali saja: unduh browser
+bunx playwright install chromium
+
+# Jalankan seluruh suite (build produksi standalone dijalankan otomatis)
+bun run test:e2e
+
+# Tanpa database: test publik tetap jalan, test ber-data di-skip
+E2E_WITH_DB=1 bun run test:e2e      # dengan DB + seed (bun run db:push && bun run seed)
+```
+
+| Berkas | Isi |
+| --- | --- |
+| `e2e/smoke.spec.ts` | Routing/locale, header keamanan + nonce CSP, 404, PWA (`/sw.js`, manifest), robots/sitemap, penolakan image optimizer, kontrak API komentar |
+| `e2e/comments.spec.ts` | Alur komentar lintas pengguna (butuh `E2E_WITH_DB=1`): kirim lewat UI → pengguna anonim lain melihatnya |
+
+Konfigurasi ada di `playwright.config.ts` (port 3100, `reuseExistingServer` di lokal). Di CI jalan sebagai job **🎭 E2E (Playwright)** dengan PostgreSQL yang di-seed.
+
+---
+
+## Keamanan & Pemeliharaan Dependensi
+
+- **Melaporkan kerentanan:** lihat [`SECURITY.md`](./SECURITY.md) — pakai GitHub private vulnerability reporting, jangan buka issue publik.
+- **UPDATE dependensi otomatis:** [`.github/dependabot.yml`](./.github/dependabot.yml) — ekosistem `bun` (lockfile `bun.lock`), `github-actions`, dan base image Docker; PR dikelompokkan per tipe (minor/patch), major ditinjau manual.
+- **Gate advisory produksi:** `bun audit --production` di CI (job 🔒 Security Audit) memblokir PR dengan advisory high di dependensi produksi.
 
 ---
 

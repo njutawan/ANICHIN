@@ -12,12 +12,13 @@
 | --- | --- |
 | `bunx tsc --noEmit` | ✅ 0 error |
 | `bun run lint` | ✅ 0 error, 0 warning |
-| `bunx vitest run` | ✅ **239 test lulus** (24 file) — naik dari 118 (121 test baru) |
+| `bunx vitest run` | ✅ **266 test lulus** (28 file) — naik dari 118 (148 test baru) |
 | `bun audit` | ✅ **0 vulnerability** (sebelumnya 14: 4 high) |
 | `next build` (Turbopack) | ✅ sukses, route `/anime/[slug]` terdaftar sebagai dynamic |
 | `next build --webpack` | ✅ sukses (validasi tipe route Next dijalankan) |
 | `next build --webpack` **tanpa** `@next/bundle-analyzer` | ✅ sukses (P1-12) — konfigurasi tetap dimuat & lolos type-check; `ANALYZE=true` hanya memunculkan peringatan lalu build lanjut, tidak crash |
 | `node scripts/build.js --webpack` tanpa Bun di PATH | ✅ sukses (P1-12) — memakai `node_modules/.bin/{prisma,next}`, jadi `npm run build` tidak lagi butuh Bun |
+| E2E Playwright (23 test, 2 file) | ✅ daftar & smoke dijalankan terhadap **build produksi standalone**: `/` 200 walau DB mati, CSP+nonce dipakai script, `/en` `lang="en"`, `/ja` 308, 404, `/auth/login`, `/admin` → login, robots/sitemap/manifest/`/sw.js` (`anichin-e2e`), image optimizer host asing **400** & lokal **200**, kontrak API komentar (GET/400/401). Browser tidak bisa diunduh di sandbox ini (CDN diblokir) → eksekusi penuh ada di CI (job `e2e`), di sini diverifikasi via `playwright test --list` + curl terhadap server standalone yang sama |
 | Smoke test dev server | ✅ CSP + `x-nonce` konsisten dengan nonce di HTML, poster SVG tersaji langsung, `/ja` → **308** ke `/`, `/en` → `<html lang="en">` + `Content-Language: en`, rute lain `lang="id"` |
 | CI GitHub Actions (PR #6) | ✅ Lint & Type-check · Unit Tests · Security Audit · Build · Docker Build **hijau** |
 | Verifikasi runtime penuh (DB) | 🟡 Embedded PG **berhasil boot** lewat `SEED=1 bun run scripts/start-postgres.ts` (listen di 5433, database `anichin` dibuat) — langkah `prisma generate/migrate/seed` tetap butuh unduhan engine dari `binaries.prisma.sh` yang diblokir sandbox. Jalankan script yang sama di mesin lokal untuk uji end-to-end. |
@@ -66,7 +67,10 @@ Legenda: ✅ diperbaiki · 🟡 sebagian / perlu tindak lanjut · ⬜ belum
 
 ### Sisa pekerjaan (rekomendasi urutan)
 
-1. **P2** — `sw.js` cache version otomatis saat build, Dependabot, `SECURITY.md`, E2E smoke test, dan menyambungkan form komentar modal ke `/api/comments` (saat ini komentar modal hanya tersimpan di localStorage sehingga tidak pernah terlihat pengguna lain).
+1. **Temuan baru saat P2 (belum dikerjakan):**
+   - Beranda **tetap 200** tanpa database, tapi isinya tidak ter-render di server: `hero-slider.tsx` & `structured-data.tsx` masih memanggil DB langsung tanpa fallback sehingga boundary Suspense jatuh ke error boundary (bukti: HTML hanya berisi skip-link saat engine Prisma tidak ada). Keduanya sudah ditandai sebagai follow-up P1-4 — sekarang dampaknya terukur.
+   - `DELETE /api/reviews` **tidak ada**, padahal UI ulasan menampilkan tombol Hapus (memanggil endpoint itu) → perlu handler serupa `DELETE /api/comments/[id]`.
+   - Threshold coverage Vitest belum diisi; template PR/issue & CODEOWNERS belum ada.
 2. **Kalau nanti mau pasar Jepang** — tambahkan kamus `ja` sungguhan (termasuk terjemahan judul/sinopsis dari sumber data), lalu hapus redirect `/ja` dan daftarkan `ja` di `ROUTE_LOCALES` (src/lib/i18n.ts) + hreflang/sitemap.
 
 ---
@@ -246,12 +250,20 @@ Dependency tanpa satu pun import di `src/`:
 ## P2 — Nice to have (kebersihan & operasional)
 
 - **Service worker:** `CACHE_VERSION = 'anichin-v1'` manual — lupa bump = user tertahan aset lama. Generate hash saat build (`next.config`/`build.js`) dan sisipkan ke `sw.js`.
+  - **Resolusi (PR ini):** `public/sw.js` dihapus; skrip SW tinggal di `src/lib/service-worker.ts` dan dilayani route handler `src/app/sw.js/route.ts` dengan `CACHE_VERSION = 'anichin-<build id>'`. Build id = `NEXT_PUBLIC_BUILD_ID` (env CI/Vercel) → fallback commit SHA → fallback timestamp, di-set sekali di `next.config.ts` supaya ikut ter-inline saat build. Tanggapan dilayani `force-static` + `Cache-Control: no-store` (update SW selalu terdeteksi), dan `Service-Worker-Allowed: /`.
+- **Form komentar modal hanya tersimpan di localStorage** — komentar tidak pernah terlihat pengguna lain, dan tombol "Hapus" hanya menghapus salinan lokal (komentar orang lain tetap tampil).
+  - **Resolusi (PR ini):** `src/components/site/episode-comments.tsx` membaca daftar dari `GET /api/comments` (cursor pagination, tombol "Muat komentar lama"), mengirim lewat `POST /api/comments`, dan menghapus lewat route baru `DELETE /api/comments/[id]` (hanya penulis atau admin; 403 untuk yang lain). Form dinonaktifkan + tautan login kalau belum masuk (komentar butuh akun, sama seperti ulasan). Store lokal hanya menyimpan jejak aktivitas untuk pencapaian, bukan lagi sumber daftar. Tombol "Suka" dihapus karena `likes` tidak punya endpoint/buku besar per pengguna — menampilkannya hanya akan menyesatkan (follow-up).
+  - Sekaligus memperbaiki: modal player/komentar kini juga dipasang di halaman kanonik `/anime/[slug]` — sebelumnya hanya ada di beranda, sehingga tombol "Tonton Sekarang" di halaman anime tidak pernah membuka apa pun.
+  - Test: 8 test komponen + 8 test route DELETE.
 - **`public/ai.txt` & `llms.txt`** mengklaim fitur "download anime"; pastikan sinkron dengan produk (dan `ai.txt` mendaftar `/api/admin/` yang tidak pernah di-crawl AI — tidak berbahaya, hanya noise).
 - **`sanitizeComment` ganda:** logika pembersihan ditulis ulang di `api/comments` & `api/reviews` (dan util di `lib/security.ts` dipakai client). Satukan agar tidak ada dua definisi yang bisa berbeda.
 - **Repo hygiene:** tidak ada `.github/dependabot.yml`, `SECURITY.md`, template PR/issue, `CODEOWNERS`. Untuk proyek dengan banyak secret & deploy pipeline, Dependabot + SECURITY.md murah dan berguna.
+  - **Resolusi (PR ini):** `.github/dependabot.yml` ditambahkan — **ekosistem `bun`** (bukan `npm`, karena repo ini hanya punya `bun.lock`; ekosistem npm tidak bisa memperbarui lockfile Bun sehingga CI `--frozen-lockfile` akan gagal), plus `github-actions` + `docker` (base image), grup minor/patch, dan ignore major `node` di image runner. `SECURITY.md` ditulis (lingkup, kanal pelaporan, target respons, safe harbor). Catatan: Dependabot hanya membaca konfigurasi dari branch **default** → aktif setelah merge; security update otomatis untuk ekosistem `bun` belum didukung GitHub, jadi advisory produksi tetap dijaga `bun audit --production` di CI. Template PR/issue & CODEOWNERS belum dikerjakan.
 - **`.env.example`:** belum mendokumentasikan `NEXT_PUBLIC_SITE_URL`, `IP_HASH_SALT`, `DEPLOY_TARGET` untuk Vercel, dsb.
 - **`Caddyfile`/compose:** pastikan `trusted_proxies` di-set agar XFF tidak bisa dipalsukan (lihat P0-4).
 - **A11y:** setelah `lang` per-locale diperbaiki, pertimbangkan audit `axe` di CI (beberapa dialog Radix perlu `aria-describedby` eksplisit).
+- **Test:** E2E/Playwright belum ada (hanya 10 file unit).
+  - **Resolusi (PR ini):** `playwright.config.ts` + `e2e/smoke.spec.ts` (23 test, jalan di build produksi) + `e2e/comments.spec.ts` (alur komentar lintas pengguna, `E2E_WITH_DB=1`) dan job CI `🎭 E2E (Playwright)` dengan PostgreSQL ter-seed. Threshold coverage Vitest masih belum diisi.
 
 ---
 

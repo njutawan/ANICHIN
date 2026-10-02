@@ -6,12 +6,24 @@
  * `slice(0, 300)` — input yang lolos validasi terpotong diam-diam).
  */
 import { z } from 'zod';
+import {
+  COMMENT_MAX_LENGTH,
+  COMMENT_MIN_LENGTH,
+  REVIEW_MAX_LENGTH,
+  REVIEW_MIN_LENGTH,
+} from './limits';
 
-/** Batas panjang yang benar-benar disimpan (dipakai validasi + sanitasi). */
-export const COMMENT_MAX_LENGTH = 300;
-export const COMMENT_MIN_LENGTH = 3;
-export const REVIEW_MAX_LENGTH = 500;
-export const REVIEW_MIN_LENGTH = 5;
+/**
+ * Batas panjang yang benar-benar disimpan (dipakai validasi + sanitasi).
+ * Nilainya tinggal di `./limits` (tanpa dependensi) supaya komponen klien bisa
+ * memakai angka yang sama tanpa ikut membundel Zod ke browser.
+ */
+export {
+  COMMENT_MAX_LENGTH,
+  COMMENT_MIN_LENGTH,
+  REVIEW_MAX_LENGTH,
+  REVIEW_MIN_LENGTH,
+} from './limits';
 
 /** Slug anime: huruf kecil, angka, dan tanda hubung. */
 export const animeSlugSchema = z
