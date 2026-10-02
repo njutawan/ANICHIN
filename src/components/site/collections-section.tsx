@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { homeQueryKeys } from '@/lib/queries/home';
 import {
   Trophy, Flame, Gem, Castle, Heart, Bot, Sparkles,
 } from 'lucide-react';
@@ -32,7 +33,7 @@ const ICONS: Record<string, React.ComponentType<{ className?: string; style?: Re
 export function CollectionsSection() {
   const [activeIdx, setActiveIdx] = useState(0);
   const { data, isLoading } = useQuery({
-    queryKey: ['collections'],
+    queryKey: homeQueryKeys.collections,
     queryFn: async () => {
       const res = await fetch('/api/collections');
       if (!res.ok) throw new Error('collections');

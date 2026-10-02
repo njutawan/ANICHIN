@@ -12,7 +12,7 @@
 | --- | --- |
 | `bunx tsc --noEmit` | ✅ 0 error |
 | `bun run lint` | ✅ 0 error, 0 warning |
-| `bunx vitest run` | ✅ **188 test lulus** (18 file) — naik dari 118 (70 test baru) |
+| `bunx vitest run` | ✅ **211 test lulus** (22 file) — naik dari 118 (93 test baru) |
 | `bun audit` | ✅ **0 vulnerability** (sebelumnya 14: 4 high) |
 | `next build` (Turbopack) | ✅ sukses, route `/anime/[slug]` terdaftar sebagai dynamic |
 | `next build --webpack` | ✅ sukses (validasi tipe route Next dijalankan) |
@@ -46,7 +46,7 @@ Legenda: ✅ diperbaiki · 🟡 sebagian / perlu tindak lanjut · ⬜ belum
 | P1-1 | GET komentar/ulasan tanpa batas + validasi ≠ penyimpanan | ✅ | `src/lib/validation.ts` (Zod) + paginasi cursor (`limit+1`, `hasMore`, `nextCursor`); batas validasi = batas simpan (300/500); sanitasi per code point (`sanitizeUserText`); 13 test route baru |
 | P1-2 | `jsonld`/`og` tanpa rate limit & tanpa validasi slug | ✅ | Keduanya kini rate-limited + validasi slug + `auditLog`; logika dipusatkan di `src/lib/anime-seo.ts` |
 | P1-3 | JSON-LD inline tanpa nonce (CSP `strict-dynamic`) | ✅ | `layout.tsx` + `structured-data.tsx` membaca `x-nonce`; terbukti nonce HTML == nonce header saat smoke test |
-| P1-4 | Homepage `force-dynamic` + 25 `useQuery` | ⬜ | Belum (butuh refactor ke RSC + initial data) — dicatat sebagai pekerjaan lanjutan |
+| P1-4 | Homepage `force-dynamic` + 25 `useQuery` | ✅ | Prefetch RSC + hidrasi TanStack Query: kunjungan pertama **0 request API** untuk data homepage (sebelumnya ~17) dan **0 query DB** selama TTL cache. Data penting dikirim sebagai props → ada di HTML. `force-dynamic` **sengaja dipertahankan** (nonce CSP butuh HTML dinamis) — yang di-cache adalah datanya (`unstable_cache`), sesuai catatan review. Satu loader gagal ≠ halaman 500 (payload kosong + log). Detail di §P1-4 |
 | P1-5 | `images.remotePatterns: '**'` | ⬜ | Belum — perlu daftar host CDN final |
 | P1-6 | 16 dependency tak terpakai + README tidak akurat | ✅ | 18 paket dihapus dari `package.json` + `bun.lock` diregenerasi; README diperbaiki (Framer Motion/Zod); zod kini benar-benar dipakai |
 | P1-7 | Audit log: `appendFileSync` + hash IP tanpa salt | ✅ | Antrean `fs.promises.appendFile`, rotasi async, HMAC-SHA256 + `IP_HASH_SALT` |
@@ -64,11 +64,10 @@ Legenda: ✅ diperbaiki · 🟡 sebagian / perlu tindak lanjut · ⬜ belum
 
 ### Sisa pekerjaan (rekomendasi urutan)
 
-1. **P1-4** — render data utama homepage sebagai RSC + kirim sebagai `initialData` ke TanStack Query.
-2. **P1-5** — whitelist host gambar (`s4.anilist.co`, `cdn.myanimelist.net`, dst).
-3. **P1-12** — `next.config.ts`: pakai `require()` lazy untuk bundle-analyzer + fallback `npx` di `scripts/build.js`.
-4. **P2** — `sw.js` cache version otomatis saat build, Dependabot, `SECURITY.md`, E2E smoke test, dan menyambungkan form komentar modal ke `/api/comments` (saat ini komentar modal hanya tersimpan di localStorage sehingga tidak pernah terlihat pengguna lain).
-5. **Kalau nanti mau pasar Jepang** — tambahkan kamus `ja` sungguhan (termasuk terjemahan judul/sinopsis dari sumber data), lalu hapus redirect `/ja` dan daftarkan `ja` di `ROUTE_LOCALES` (src/lib/i18n.ts) + hreflang/sitemap.
+1. **P1-5** — whitelist host gambar (`s4.anilist.co`, `cdn.myanimelist.net`, dst).
+2. **P1-12** — `next.config.ts`: pakai `require()` lazy untuk bundle-analyzer + fallback `npx` di `scripts/build.js`.
+3. **P2** — `sw.js` cache version otomatis saat build, Dependabot, `SECURITY.md`, E2E smoke test, dan menyambungkan form komentar modal ke `/api/comments` (saat ini komentar modal hanya tersimpan di localStorage sehingga tidak pernah terlihat pengguna lain).
+4. **Kalau nanti mau pasar Jepang** — tambahkan kamus `ja` sungguhan (termasuk terjemahan judul/sinopsis dari sumber data), lalu hapus redirect `/ja` dan daftarkan `ja` di `ROUTE_LOCALES` (src/lib/i18n.ts) + hreflang/sitemap.
 
 ---
 
@@ -175,6 +174,13 @@ const forwarded = req.headers.get('x-forwarded-for');   // dipercaya mentah
 ### P1-4. Beban request homepage berlebihan
 - `src/app/layout.tsx` men-`force-dynamic` **semua** halaman, dan homepage memuat ~20 komponen client dengan total **25+ `useQuery`** (`genre-grid` 4, `sidebar`/`trailers`/`anime-browse`/… masing-masing 2-3) → puluhan request API + query DB per kunjungan, tanpa cache CDN/ISR.
 - **Fix:** render data penting sebagai RSC (server component) dan kirim sebagai initial data ke TanStack Query, gabungkan endpoint sejenis (mis. `/api/home`), atau pakai `unstable_cache`/revalidate untuk data yang jarang berubah. Pastikan nonce tetap bekerja (nonce butuh HTML dinamis — data boleh tetap di-cache).
+- **Resolusi (PR ini):**
+  - `src/lib/data/home.ts` — semua query homepage (`listAnime`, `getLatestEpisodes`, `getTodayEpisodes`, `getFeatured`, `getCollections`, `getGenres`, `getPopular`, `getSchedule`, `getStats`) dipindah ke satu modul **server-only** yang dibungkus `unstable_cache` (TTL 120 dtk untuk feed episode, 300 dtk untuk katalog). Route API (`/api/latest`, `/api/anime`, `/api/genres`, …) kini memanggil loader yang sama → satu implementasi, bentuk respons identik dengan sebelumnya (tanggal diserialisasi ISO, `limit` tetap dibatasi 48).
+  - `src/lib/queries/home.ts` — kunci & parameter query terpusat (`homeQueryKeys`, `HOME_QUERY_PARAMS`, `animeListUrl`) supaya prefetch server dan `useQuery` di client tidak mungkin berbeda kunci.
+  - `src/lib/home-prefetch.ts` + `src/components/home/home-content.tsx` — beranda (dipakai `/` dan `/en`) menjadi RSC: 17 dataset diambil paralel lewat cache, enam di antaranya (breaking news, episode hari ini, rilisan terbaru, ranking populer, jadwal, statistik) dikirim sebagai props `initialData` sehingga ikut ter-render di HTML; sisanya di-dehydrate lewat `<HydrationBoundary>`.
+  - Hasil: data homepage tidak lagi diambil lewat HTTP dari browser saat first load, dan tiap dataset hanya di-query sekali per TTL (bukan per kunjungan). Statistik dashboard (`/api/analytics`, admin-only) kini dirender hanya untuk admin — pengunjung biasa berhenti mengirim request yang selalu 401.
+  - Ketahanan: `Promise.allSettled` + payload kosong per dataset; kegagalan satu loader (mis. DB down) dicatat ke logger tanpa menjatuhkan seluruh halaman.
+  - **Catatan `force-dynamic`:** root layout tetap `force-dynamic` karena nonce CSP harus dibuat per-request (halaman statis tidak bisa membawa nonce → script diblokir `strict-dynamic`). Yang dipindahkan ke cache adalah **datanya**; HTML tetap dinamis tapi murah karena query-nya tidak diulang.
 
 ### P1-5. Image optimizer terbuka untuk semua domain
 ```ts

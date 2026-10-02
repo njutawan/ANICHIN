@@ -1,29 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { db } from '@/lib/db';
+import { getGenres } from '@/lib/data/home';
 
-// Cache for 5 minutes (300 seconds) — data changes infrequently
-export const revalidate = 300;
-
+/** Semua genre + jumlah anime per genre. */
 export async function GET(req: NextRequest) {
+  const limited = await checkRateLimit(req, 'read');
+  if (limited) return limited;
+
   try {
-    // --- Rate limiting ---
-    const limited = await checkRateLimit(req, 'read');
-    if (limited) return limited;
-    const genres = await db.genre.findMany({
-      orderBy: { name: 'asc' },
-      include: { _count: { select: { animes: true } } },
-    });
-    return NextResponse.json({
-      genres: genres.map(g => ({
-        id: g.id,
-        name: g.name,
-        slug: g.slug,
-        count: g._count.animes,
-      })),
-    });
+    return NextResponse.json(await getGenres());
   } catch (_e) {
-    // Don't leak internal error details to client
     return NextResponse.json({ error: 'Internal server error. Please try again.' }, { status: 500 });
   }
 }

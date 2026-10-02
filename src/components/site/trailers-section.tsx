@@ -10,6 +10,7 @@ import { SectionHeading } from './latest-updates';
 import { useUIStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
 import { formatViews } from '@/lib/types';
+import { homeQueryKeys } from '@/lib/queries/home';
 import type { AnimeCardData } from '@/lib/types';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
@@ -20,7 +21,7 @@ export function TrailersSection() {
   const [trailerSlug, setTrailerSlug] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['featured-trailers'],
+    queryKey: homeQueryKeys.trailers,
     queryFn: async () => {
       const res = await fetch('/api/featured');
       if (!res.ok) throw new Error('featured');

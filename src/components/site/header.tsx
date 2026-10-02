@@ -27,6 +27,7 @@ import {
 } from '@/components/ui/popover';
 import { Badge } from '@/components/ui/badge';
 import { useI18n, useLanguageSwitch } from '@/lib/i18n-context';
+import { homeQueryKeys } from '@/lib/queries/home';
 
 const NAV = [
   { labelKey: 'nav.home', href: '#home', icon: Home },
@@ -491,7 +492,7 @@ function MobilePwaInstall({ onDone }: { onDone: () => void }) {
 function GenreDropdown() {
   const { t } = useI18n();
   const { data, isLoading } = useQuery({
-    queryKey: ['genres-list'],
+    queryKey: homeQueryKeys.genres,
     queryFn: async () => {
       const res = await fetch('/api/genres');
       if (!res.ok) throw new Error('genres');

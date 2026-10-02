@@ -401,6 +401,24 @@ Response menyertakan header `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-Rat
 - `frame-src 'self' youtube.com youtube-nocookie.com` (untuk trailer)
 - `object-src 'none'`, `base-uri 'none'`, `frame-ancestors 'self'`
 
+### Data Beranda (RSC + cache)
+
+Beranda (`/` dan `/en`, komponen server `src/components/home/home-content.tsx`)
+mengambil seluruh datanya di server lalu menghidrasi TanStack Query:
+
+- Loader query ada di `src/lib/data/home.ts` dan dibungkus `unstable_cache`
+  (TTL 120 detik untuk feed episode, 300 detik untuk katalog/statistik) — satu
+  query per dataset per TTL, bukan per kunjungan.
+- Kunci & parameter query terpusat di `src/lib/queries/home.ts` supaya
+  prefetch server dan `useQuery` di komponen tidak pernah berbeda kunci.
+- Data penting (episode hari ini, rilisan terbaru, ranking, jadwal, statistik)
+  dikirim sebagai props `initialData` sehingga ikut ter-render di HTML;
+  sisanya lewat `<HydrationBoundary>`.
+- Hasilnya: kunjungan pertama tidak memanggil `/api/*` dari browser, dan
+  `force-dynamic` (wajib untuk nonce CSP) tidak lagi berarti puluhan query DB
+  per request. Satu dataset gagal (mis. DB down) memakai payload kosong, bukan
+  menjatuhkan halaman.
+
 ### HTTP Security Headers (9 layer)
 
 Dikirim oleh middleware + next.config.ts (defense-in-depth):

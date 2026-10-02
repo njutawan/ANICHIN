@@ -9,6 +9,11 @@ import { SectionHeading } from './latest-updates';
 import { cn } from '@/lib/utils';
 import type { AnimeCardData, GenreData } from '@/lib/types';
 import { useI18n } from '@/lib/i18n-context';
+import {
+  animeListUrl,
+  HOME_QUERY_PARAMS,
+  homeQueryKeys,
+} from '@/lib/queries/home';
 
 const GENRE_COLORS = [
   'from-rose-500/30 to-rose-500/5 border-rose-500/30 hover:border-rose-500/60',
@@ -24,7 +29,7 @@ const GENRE_COLORS = [
 export function GenreGrid() {
   const { t } = useI18n();
   const { data, isLoading } = useQuery({
-    queryKey: ['genres-list'],
+    queryKey: homeQueryKeys.genres,
     queryFn: async () => {
       const res = await fetch('/api/genres');
       if (!res.ok) throw new Error('genres');
@@ -79,8 +84,8 @@ export function TopRatedRail() {
       titleKey="section.topRated"
       subtitleKey="section.subtitle.topRatedShort"
       icon={Star}
-      queryKey={['anime-rated']}
-      fetchUrl="/api/anime?sort=score&limit=18"
+      queryKey={homeQueryKeys.topRatedRail}
+      fetchUrl={animeListUrl(HOME_QUERY_PARAMS.topRatedRail)}
     />
   );
 }
@@ -89,9 +94,9 @@ export function TopRatedRail() {
 export function UpcomingSeasonSection() {
   const { t } = useI18n();
   const { data, isLoading } = useQuery({
-    queryKey: ['anime-upcoming'],
+    queryKey: homeQueryKeys.upcoming,
     queryFn: async () => {
-      const res = await fetch('/api/anime?status=Upcoming&sort=score&limit=12');
+      const res = await fetch(animeListUrl(HOME_QUERY_PARAMS.upcoming));
       if (!res.ok) throw new Error('upcoming');
       return res.json();
     },
@@ -129,7 +134,7 @@ function Rail({
   titleKey: string;
   subtitleKey: string;
   icon: React.ComponentType<{ className?: string }>;
-  queryKey: unknown[];
+  queryKey: readonly unknown[];
   fetchUrl: string;
   pulse?: boolean;
 }) {

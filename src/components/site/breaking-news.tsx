@@ -7,6 +7,8 @@ import { cn } from '@/lib/utils';
 import { useMounted } from '@/hooks/use-mounted';
 import { formatViews, timeAgo, type EpisodeData } from '@/lib/types';
 import { useUIStore } from '@/lib/store';
+import { homeQueryKeys } from '@/lib/queries/home';
+import type { LatestPayload } from '@/lib/types';
 
 /**
  * Breaking News — eye-catching animated banner highlighting latest/important content.
@@ -32,7 +34,7 @@ interface NewsItem {
   badge: string;
 }
 
-export function BreakingNews() {
+export function BreakingNews({ initialData }: { initialData?: LatestPayload } = {}) {
   const mounted = useMounted();
   const [dismissed, setDismissed] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -47,13 +49,15 @@ export function BreakingNews() {
 
   // Fetch latest episodes as breaking news
   const { data } = useQuery({
-    queryKey: ['breaking-news'],
+    queryKey: homeQueryKeys.breakingNews,
     queryFn: async () => {
       const res = await fetch('/api/latest?page=1&limit=10');
       if (!res.ok) throw new Error('latest');
       return res.json();
     },
     staleTime: 60_000,
+    // Diisi server (RSC) → banner tampil di HTML, bukan setelah JS jalan.
+    initialData,
   });
 
   const episodes: EpisodeData[] = data?.episodes ?? [];
