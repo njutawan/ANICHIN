@@ -57,7 +57,9 @@ describe('GET /api/health', () => {
     const body = await res.json();
     expect(body.status).toBe('unhealthy');
     expect(body.checks.db.status).toBe('fail');
-    expect(body.checks.db.error).toBe('Connection refused');
+    // Pesan error internal tidak boleh bocor ke klien (hanya kode generik).
+    expect(body.checks.db.error).toBe('DB_UNAVAILABLE');
+    expect(JSON.stringify(body)).not.toContain('Connection refused');
   });
 
   it('response body includes status, uptime, and checks', async () => {

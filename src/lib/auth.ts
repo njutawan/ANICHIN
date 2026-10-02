@@ -7,6 +7,7 @@ import { db } from '@/lib/db';
 import { compareSync, hashSync } from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import { sanitizeDisplayName } from '@/lib/security';
+import { getClientIp } from '@/lib/ip';
 import {
   isLocked as storeIsLocked,
   incrFails,
@@ -126,10 +127,11 @@ function buildProviders() {
         const password = credentials?.password ?? '';
         const totp = (credentials?.totp ?? '').trim();
 
-        // Extract client IP for attempt tracking
-        const forwarded = req?.headers?.get?.('x-forwarded-for');
-        const realIp = req?.headers?.get?.('x-real-ip');
-        const ip = (forwarded?.split(',')[0]?.trim() ?? realIp ?? 'unknown').slice(0, 64);
+        // Extract client IP for attempt tracking.
+        // Pakai resolver tepercaya (@/lib/ip): entri XFF paling KIRI dikirim
+        // klien, jadi memakainya membuat login lockout bisa dilewati hanya
+        // dengan mengarang header X-Forwarded-For.
+        const ip = getClientIp(req);
 
         if (!email || !password) return null;
         if (!isValidEmail(email)) return null;

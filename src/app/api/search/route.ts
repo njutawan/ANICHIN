@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { checkRateLimit, addRateLimitHeaders } from '@/lib/rate-limit';
 import { auditLog } from '@/lib/audit-log';
+import { getClientIp } from '@/lib/ip';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,8 +32,8 @@ export async function GET(req: NextRequest) {
     // --- Rate limiting ---
     const limited = await checkRateLimit(req, 'search');
     if (limited) {
-      const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-      auditLog.rateLimitHit(ip, '/api/search', 'search');
+      const ip = getClientIp(req);
+      await auditLog.rateLimitHit(ip, '/api/search', 'search');
       return limited;
     }
 
@@ -46,8 +47,8 @@ export async function GET(req: NextRequest) {
 
     // --- Suspicious request detection ---
     if (detectSuspicious(rawQ)) {
-      const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-      auditLog.suspiciousRequest(ip, '/api/search', 'injection_attempt');
+      const ip = getClientIp(req);
+      await auditLog.suspiciousRequest(ip, '/api/search', 'injection_attempt');
       return addRateLimitHeaders(
         NextResponse.json({ error: 'Invalid request.' }, { status: 400 }),
         'search'
@@ -81,7 +82,7 @@ export async function GET(req: NextRequest) {
     return addRateLimitHeaders(response, 'search');
   } catch {
     // Don't leak error details to client — log internally
-    auditLog.apiError('/api/search', 'GET', 500, 'Search failed');
+    await auditLog.apiError('/api/search', 'GET', 500, 'Search failed');
     return NextResponse.json(
       { error: 'Internal server error. Please try again.' },
       { status: 500 }
