@@ -35,6 +35,15 @@ function makeAnime(overrides: Partial<AnimeSeoInput> = {}): AnimeSeoInput {
   };
 }
 
+// `SITE_URL` di src/lib/site.ts dibaca saat module load. CI menyetel
+// NEXTAUTH_URL=http://localhost:3000 dan developer bisa punya .env sendiri,
+// jadi netralkan env *sebelum* import agar assertion URL absolut di bawah
+// benar-benar menguji fallback DEFAULT_SITE_URL (deterministik).
+vi.hoisted(() => {
+  delete process.env.NEXT_PUBLIC_SITE_URL;
+  delete process.env.NEXTAUTH_URL;
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
 });
