@@ -12,13 +12,13 @@
 | --- | --- |
 | `bunx tsc --noEmit` | ✅ 0 error |
 | `bun run lint` | ✅ 0 error, 0 warning |
-| `bunx vitest run` | ✅ **169 test lulus** (15 file) — naik dari 118 (51 test baru) |
+| `bunx vitest run` | ✅ **188 test lulus** (18 file) — naik dari 118 (70 test baru) |
 | `bun audit` | ✅ **0 vulnerability** (sebelumnya 14: 4 high) |
 | `next build` (Turbopack) | ✅ sukses, route `/anime/[slug]` terdaftar sebagai dynamic |
 | `next build --webpack` | ✅ sukses (validasi tipe route Next dijalankan) |
-| Smoke test dev server | ✅ CSP + `x-nonce` konsisten dengan nonce di HTML, `robots.txt` baru, poster SVG tersaji langsung |
+| Smoke test dev server | ✅ CSP + `x-nonce` konsisten dengan nonce di HTML, poster SVG tersaji langsung, `/ja` → **308** ke `/`, `/en` → `<html lang="en">` + `Content-Language: en`, rute lain `lang="id"` |
 | CI GitHub Actions (PR #6) | ✅ Lint & Type-check · Unit Tests · Security Audit · Build · Docker Build **hijau** |
-| Verifikasi runtime penuh (DB) | ⛔ Tidak bisa di sandbox ini: Prisma butuh `libquery_engine` dari `binaries.prisma.sh` yang diblokir. Jalankan `bun run scripts/start-postgres.ts` di mesin lokal untuk uji end-to-end. |
+| Verifikasi runtime penuh (DB) | 🟡 Embedded PG **berhasil boot** lewat `SEED=1 bun run scripts/start-postgres.ts` (listen di 5433, database `anichin` dibuat) — langkah `prisma generate/migrate/seed` tetap butuh unduhan engine dari `binaries.prisma.sh` yang diblokir sandbox. Jalankan script yang sama di mesin lokal untuk uji end-to-end. |
 
 > Catatan CI: check **CodeQL** (default setup dari app `github-advanced-security`) gagal dalam ~3 detik pada PR ini. Ini kegagalan konfigurasi repositori (code scanning butuh GitHub Advanced Security untuk repo privat), bukan akibat perubahan kode — matikan default setup di *Settings → Code security* atau sediakan runner CodeQL bila diinginkan.
 
@@ -41,7 +41,7 @@ Legenda: ✅ diperbaiki · 🟡 sebagian / perlu tindak lanjut · ⬜ belum
 | P0-4b | Limiter in-memory saat multi-instance | 🟡 | Sudah ada Redis opsional; **wajibkan** `REDIS_URL` di produksi masih perlu keputusan ops |
 | P0-5 | Tidak ada halaman anime yang bisa diindeks | ✅ | Route baru `src/app/anime/[slug]/page.tsx` (server-rendered: judul, sinopsis, episode, ulasan, JSON-LD, breadcrumb, internal link); `generateMetadata` canonical/OG per anime; sitemap diperbaiki (hapus URL fragmen & `/?anime=`, tanpa `take: 100`); kartu anime kini `<Link href="/anime/<slug>">` sungguhan |
 | P0-6 | Sentry tidak pernah aktif di browser | ✅ | `src/instrumentation-client.ts` (konvensi SDK v10 + `onRouterTransitionStart`); file `sentry.*.config.ts` yang mati dihapus |
-| P0-7 | `/ja` palsu + `<html lang>` salah | ⬜ | Belum dikerjakan (butuh kamus ja atau penghapusan rute) — lihat P2 |
+| P0-7 | `/ja` palsu + `<html lang>` salah | ✅ | **(a)** `/ja` dihapus + redirect permanen 308 → `/` (dan `/ja/*` → `/*`) agar URL lama tidak 404; entri `ja-JP` di hreflang & sitemap dibuang. **(b)** `<html lang>` tidak lagi hardcoded: proxy meneruskan `x-locale`, root layout membacanya (`/en` → `lang="en"` + `Content-Language: en`). **(c)** bahasa kini ditentukan URL: provider i18n menerima `initialLocale`, jadi `/en` **dirender Inggris sejak SSR** (sebelumnya Indonesia lalu ditukar setelah hydration). **(d)** toggle bahasa berpindah URL di `/` dan `/en` (query string dipertahankan), di rute netral tetap menukar teks di tempat. +19 test |
 | P0-8 | Domain hardcoded 27× + env server di client | ✅ | `src/lib/site.ts` (`NEXT_PUBLIC_SITE_URL` → `NEXTAUTH_URL` → default) dipakai di 16 file; `anime-detail-modal` tidak lagi memakai `NEXTAUTH_URL` di browser; `.env.example` diperbarui; terbukti di smoke test (`Host: http://localhost:3000`) |
 | P1-1 | GET komentar/ulasan tanpa batas + validasi ≠ penyimpanan | ✅ | `src/lib/validation.ts` (Zod) + paginasi cursor (`limit+1`, `hasMore`, `nextCursor`); batas validasi = batas simpan (300/500); sanitasi per code point (`sanitizeUserText`); 13 test route baru |
 | P1-2 | `jsonld`/`og` tanpa rate limit & tanpa validasi slug | ✅ | Keduanya kini rate-limited + validasi slug + `auditLog`; logika dipusatkan di `src/lib/anime-seo.ts` |
@@ -59,15 +59,16 @@ Legenda: ✅ diperbaiki · 🟡 sebagian / perlu tindak lanjut · ⬜ belum
 | **BARU** | Poster SVG ditolak image optimizer (HTTP 400) → semua poster tampil placeholder | ✅ | `AnimeImage` menyajikan SVG/data-URI dengan `unoptimized`; 4 test baru |
 | **BARU** | `proxy.ts` mengecualikan seluruh prefix `anime/` → halaman baru tanpa security header & nonce | ✅ | Matcher dipersempit ke berkas gambar (`anime/*.{svg,png,…}`) |
 | **BARU** | `scripts/start-postgres.ts` masih era SQLite (rusak) | ✅ | Ditulis ulang untuk PostgreSQL-only + langkah seed opsional |
+| **BARU** | Script di atas **tetap tidak jalan** meski sudah ditulis ulang: opsi `pgPort` tidak dikenal `embedded-postgres` (namanya `port`) sehingga PG listen di 5432 sementara `.env` menunjuk 5433, dan `user`/`password` tidak pernah diteruskan sehingga kredensial `anichin` tidak ada | ✅ | Opsi diperbaiki (`port`/`user`/`password`/`authMethod`); diverifikasi dengan menjalankan script: PG listen di **5433**, database `anichin` dibuat |
 | **BARU** | 4 test SEO gagal hanya di CI (`NEXTAUTH_URL` CI terbaca saat module load) | ✅ | `vi.hoisted()` menetralkan env URL di `anime-seo.test.ts`; lokal & CI hijau |
 
 ### Sisa pekerjaan (rekomendasi urutan)
 
-1. **P0-7** — putuskan: implementasi locale `ja` sungguhan atau hapus `/ja` (butuh keputusan produk).
-2. **P1-4** — render data utama homepage sebagai RSC + kirim sebagai `initialData` ke TanStack Query.
-3. **P1-5** — whitelist host gambar (`s4.anilist.co`, `cdn.myanimelist.net`, dst).
-4. **P1-12** — `next.config.ts`: pakai `require()` lazy untuk bundle-analyzer + fallback `npx` di `scripts/build.js`.
-5. **P2** — `sw.js` cache version otomatis saat build, Dependabot, `SECURITY.md`, E2E smoke test, dan menyambungkan form komentar modal ke `/api/comments` (saat ini komentar modal hanya tersimpan di localStorage sehingga tidak pernah terlihat pengguna lain).
+1. **P1-4** — render data utama homepage sebagai RSC + kirim sebagai `initialData` ke TanStack Query.
+2. **P1-5** — whitelist host gambar (`s4.anilist.co`, `cdn.myanimelist.net`, dst).
+3. **P1-12** — `next.config.ts`: pakai `require()` lazy untuk bundle-analyzer + fallback `npx` di `scripts/build.js`.
+4. **P2** — `sw.js` cache version otomatis saat build, Dependabot, `SECURITY.md`, E2E smoke test, dan menyambungkan form komentar modal ke `/api/comments` (saat ini komentar modal hanya tersimpan di localStorage sehingga tidak pernah terlihat pengguna lain).
+5. **Kalau nanti mau pasar Jepang** — tambahkan kamus `ja` sungguhan (termasuk terjemahan judul/sinopsis dari sumber data), lalu hapus redirect `/ja` dan daftarkan `ja` di `ROUTE_LOCALES` (src/lib/i18n.ts) + hreflang/sitemap.
 
 ---
 
@@ -140,6 +141,7 @@ const forwarded = req.headers.get('x-forwarded-for');   // dipercaya mentah
 - `src/app/layout.tsx:127` → `<html lang="id" …>` untuk **semua** rute, termasuk `/en` dan `/ja`.
 - **Dampak:** sinyal bahasa ke Google tidak konsisten (meta `ja_JP` + konten Indonesia + `lang="id"`) → berisiko dianggap duplikat/klanking; aksesibilitas (screen reader) salah bahasa.
 - **Fix:** pilih satu — (a) implementasi locale `ja` sungguhan (dictionary + `lang` per rute), atau (b) hapus `/ja` dan redirect ke `/`. Minimal: set `lang` dinamis per segmen layout.
+- **Resolusi (PR ini): opsi (b).** `/ja` dihapus dan diarahkan permanen (308) ke `/`; `ja-JP` dibuang dari hreflang + sitemap. `lang` sekarang di-set proxy per-request (`x-locale` → `<html lang>`) dan bahasa yang dirender ditentukan URL, sehingga `/en` benar-benar Inggris sejak HTML pertama. Bonus: toggle bahasa kini berpindah URL di `/` dan `/en` (bukan lagi state klien yang membuat URL dan isi halaman bertentangan). Kalau penerjemahan `ja` sungguhan (termasuk judul/sinopsis) nanti dikerjakan, langkah mengaktifkannya kembali ada di `src/lib/i18n.ts` (`ROUTE_LOCALES`) dan `next.config.ts` (hapus `redirects`).
 
 ### P0-8. Domain hardcoded 27× dan env server dipakai di client
 - `const SITE_URL = 'https://anichin.id'` disalin di 16+ file (layout, sitemap, robots, structured-data, semua layout auth, API jsonld/og, dsb).
