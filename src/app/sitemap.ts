@@ -14,7 +14,9 @@ export const dynamic = 'force-dynamic';
  * Google mengabaikan fragment di sitemap sehingga semuanya hanya menjadi
  * duplikat dari halaman utama.
  */
-const LOCALES = ['', '/en', '/ja'] as const;
+// `/ja` dihapus (P0-7): kontennya bukan Jepang, hanya duplikat homepage.
+// Redirect 301-nya ada di next.config.ts.
+const LOCALES = ['', '/en'] as const;
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();

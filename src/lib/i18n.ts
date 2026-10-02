@@ -10,7 +10,8 @@
  * Use `.replace('{n}', String(value))` at call site — `t()` returns the raw
  * template so we keep the dictionary small and the helper dependency-free.
  *
- * To add a new language: add to LOCALES, create translations object, add to translations map.
+ * To add a new language: add to LOCALES, create translations object, add to
+ * translations map, lalu daftarkan segmen URL-nya di ROUTE_LOCALES.
  */
 
 export type Locale = 'id' | 'en';
@@ -21,6 +22,38 @@ export const LOCALES: { code: Locale; name: string; flag: string }[] = [
 ];
 
 export const DEFAULT_LOCALE: Locale = 'id';
+
+/**
+ * Segmen URL pertama → locale yang direpresentasikan halaman itu.
+ *
+ * Hanya berisi locale yang benar-benar diterjemahkan. Saat ini hanya `en`:
+ * `/ja` sudah dihapus (P0-7) karena isinya bukan bahasa Jepang — URL-nya kini
+ * redirect 301 ke `/` (lihat next.config.ts). Bila kamus `ja` ditambahkan:
+ * hapus redirect itu, daftarkan `ja: 'ja'` di sini, lalu tambahkan entri
+ * hreflang + locale sitemap.
+ */
+const ROUTE_LOCALES: Record<string, Locale> = {
+  en: 'en',
+};
+
+/** URL kanonik untuk sebuah locale (`en` → `/en`, default → `/`). */
+export function localeHref(locale: Locale): string {
+  return locale === DEFAULT_LOCALE ? '/' : `/${locale}`;
+}
+
+/** Type guard untuk nilai yang berasal dari localStorage/env. */
+export function isLocale(value: unknown): value is Locale {
+  return LOCALES.some((l) => l.code === value);
+}
+
+/**
+ * Locale yang diminta URL: `/en/...` → `en`; rute netral (`/`, `/anime/x`)
+ * → DEFAULT_LOCALE (preferensi pengguna dari localStorage yang menentukan).
+ */
+export function localeFromPathname(pathname: string | null | undefined): Locale {
+  const segment = (pathname ?? '/').split('/')[1] ?? '';
+  return ROUTE_LOCALES[segment] ?? DEFAULT_LOCALE;
+}
 
 type TranslationKey = string;
 type Translations = Record<TranslationKey, string>;

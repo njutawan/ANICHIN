@@ -19,7 +19,6 @@ export const metadata: Metadata = {
     languages: {
       'id-ID': '/',
       'en-US': '/en',
-      'ja-JP': '/ja',
       'x-default': '/',
     },
   },

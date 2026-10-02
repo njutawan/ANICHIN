@@ -15,6 +15,21 @@ const nextConfig: NextConfig = {
   // Vercel has native Next.js support — standalone output would actually break Vercel deploys.
   ...(isStandalone ? { output: "standalone" as const } : {}),
   typescript: { ignoreBuildErrors: false },
+
+  /**
+   * P0-7: `/ja` dulu halaman salinan homepage berbahasa Indonesia dengan
+   * metadata Jepang + `hreflang="ja-JP"` (duplikat konten & sinyal bahasa
+   * bohong). Rutenya dihapus; URL lama diarahkan permanen (301) supaya tidak
+   * menjadi 404 di hasil pencarian. Kalau nanti kamus `ja` benar-benar
+   * ditambahkan: hapus redirect ini dan daftarkan `ja` di ROUTE_LOCALES
+   * (src/lib/i18n.ts) + LOCALES sitemap.
+   */
+  async redirects() {
+    return [
+      { source: '/ja', destination: '/', permanent: true },
+      { source: '/ja/:path*', destination: '/:path*', permanent: true },
+    ];
+  },
   reactStrictMode: true,
   poweredByHeader: false,
   productionBrowserSourceMaps: false,

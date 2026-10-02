@@ -84,6 +84,15 @@ function buildCSP(nonce: string): string {
   ].join('; ');
 }
 
+/**
+ * Locale yang direpresentasikan URL — dipakai root layout untuk `<html lang>`
+ * dan provider i18n untuk render pertama. Hanya locale yang punya kamus
+ * (src/lib/i18n.ts) yang boleh muncul di sini.
+ */
+function localeForPath(pathname: string): 'id' | 'en' {
+  return pathname === '/en' || pathname.startsWith('/en/') ? 'en' : 'id';
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -127,12 +136,15 @@ export async function proxy(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set('x-nonce', nonce);
   requestHeaders.set('Content-Security-Policy', csp);
+  // Dibaca root layout (src/app/layout.tsx) untuk `<html lang="…">`.
+  requestHeaders.set('x-locale', localeForPath(pathname));
 
   // Get the response from the route handler
   const response = NextResponse.next({ request: { headers: requestHeaders } });
 
   // Keep the nonce available to our own server components (e.g. JSON-LD blocks)
   response.headers.set('x-nonce', nonce);
+  response.headers.set('Content-Language', localeForPath(pathname));
 
   // Apply security headers
   applySecurityHeaders(response, nonce);

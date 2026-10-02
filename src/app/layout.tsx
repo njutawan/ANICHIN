@@ -29,7 +29,7 @@ import { SITE_URL } from '@/lib/site';
  *    injected into HTML that is rendered per-request — a prerendered page is
  *    generated once at build time, never gets a nonce, and `'strict-dynamic'`
  *    then blocks every script in production (page renders but never hydrates).
- * 2. Build isolation: the home/en/ja pages query PostgreSQL through server
+ * 2. Build isolation: the home/en pages query PostgreSQL through server
  *    components. Prerendering them would require a reachable database during
  *    `next build` (which the Dockerfile/CI build stages do not have).
  */
@@ -68,7 +68,6 @@ export const metadata: Metadata = {
     languages: {
       "id-ID": "/",
       "en-US": "/en",
-      "ja-JP": "/ja",
       "x-default": "/",
     },
   },
@@ -127,10 +126,15 @@ export default async function RootLayout({
   // Nonce CSP per-request dari src/proxy.ts. Script JSON-LD inline WAJIB
   // memakai nonce ini: CSP produksi memakai 'strict-dynamic' sehingga script
   // tanpa nonce diblokir browser (structured data hilang di produksi).
-  const nonce = (await headers()).get("x-nonce") ?? undefined;
+  const requestHeaders = await headers();
+  const nonce = requestHeaders.get("x-nonce") ?? undefined;
+  // `<html lang>`: sebelumnya hardcoded "id" sehingga /en menyatakan bahasa
+  // yang salah ke Google & screen reader. Header ini di-set proxy dari
+  // pathname, jadi HTML pertama sudah benar.
+  const locale = requestHeaders.get("x-locale") === "en" ? "en" : "id";
 
   return (
-    <html lang="id" suppressHydrationWarning className="dark">
+    <html lang={locale} suppressHydrationWarning className="dark">
       <head>
         {/* JSON-LD: WebSite + Organization + SearchAction */}
         <script
