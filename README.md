@@ -221,7 +221,7 @@ di-baseline sekali dengan `npx prisma migrate resolve --applied 20261001000000_i
 | Script                | Perintah                                            | Deskripsi                                              |
 | --------------------- | -------------------------------------------------- | ----------------------------------------------------- |
 | `dev`                 | `bun run dev`                                       | Jalankan dev server (Turbopack) di port 3000          |
-| `build`               | `bun run build`                                     | Build produksi standalone + copy static & public       |
+| `build`               | `bun run build` / `npm run build`                   | Build produksi standalone + copy static & public (Bun **atau** Node) |
 | `start`               | `bun run start`                                     | Jalankan server produksi (Node/Bun) standalone         |
 | `lint`                | `bun run lint`                                      | ESLint check pada seluruh codebase                     |
 | `db:push`             | `bun run db:push`                                   | Push schema.prisma ke database (overwrite)             |
@@ -229,10 +229,15 @@ di-baseline sekali dengan `npx prisma migrate resolve --applied 20261001000000_i
 | `db:migrate`          | `bun run db:migrate`                                | Prisma Migrate (dev mode, buat migration baru)         |
 | `db:reset`            | `bun run db:reset`                                  | Reset database + jalankan ulang semua migration       |
 | `seed`                | `bun run seed`                                      | Seed 24 anime + 22 genre + 223 episode                 |
-| `test`                | `bun run test`                                      | Unit test Vitest (9 suite / 111+ test)                 |
+| `test`                | `bun run test` / `npm test`                         | Unit test Vitest (24 file / 239 test)                  |
 | `db:migrate:prod`     | `bun run db:migrate:prod`                           | `prisma generate` + `prisma migrate deploy` (produksi) |
 | `db:migrate:status`   | `bun run db:migrate:status`                         | Cek status migration terhadap database                 |
 | `healthcheck`         | `bun run healthcheck`                               | Cek `/api/health` di localhost:3000                    |
+
+> **Tidak wajib Bun.** `npm run build`, `npm test`, dan `npm run lint` jalan penuh di Node 20+:
+> `scripts/build.js` memilih binary dari `node_modules/.bin/` (hasil `npm ci` / `bun install` / `pnpm install`),
+> dengan fallback `bunx` → `npx`. `ANALYZE=true` tetap butuh devDependencies terpasang, dan bila
+> `@next/bundle-analyzer` tidak ada build hanya memberi peringatan (tidak gagal).
 
 ---
 
@@ -289,8 +294,8 @@ export NODE_ENV=production
 export NEXTAUTH_URL="https://anichin.id"
 export NEXTAUTH_SECRET="$(openssl rand -hex 32)"
 
-# Build standalone output
-bun run build
+# Build standalone output (Bun atau Node — script memilih binary yang ada)
+bun run build      # atau: npm run build
 
 # Jalankan server (Node.js recommended untuk standalone)
 node .next/standalone/server.js

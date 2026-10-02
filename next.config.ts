@@ -1,10 +1,5 @@
 import type { NextConfig } from "next";
-import bundleAnalyzer from "@next/bundle-analyzer";
 import { resolveImageRemotePatterns } from "./src/lib/image-hosts";
-
-const withBundleAnalyzer = bundleAnalyzer({
-  enabled: process.env.ANALYZE === "true",
-});
 
 // Detect Vercel deployment (Vercel sets VERCEL=1 env var automatically)
 const isVercel = process.env.VERCEL === "1";
@@ -69,4 +64,41 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default withBundleAnalyzer(nextConfig);
+/**
+ * Nama paket disimpan di variabel — bukan string literal — supaya `tsc`
+ * (dijalankan `next build`) tidak wajib me-resolve tipe devDependency yang
+ * memang tidak ada di instalasi produksi (`npm ci --omit=dev`). Dengan
+ * spesifier literal, import dinamis tetap menabrak error TS2307.
+ */
+const ANALYZER_PACKAGE = "@next/bundle-analyzer";
+
+/**
+ * P1-12: `@next/bundle-analyzer` adalah **devDependency**. Kalau di-import di
+ * top-level (seperti sebelumnya), `npm ci --omit=dev` / image produksi gagal
+ * memuat `next.config.ts` sama sekali — padahal build produksi tidak pernah
+ * butuh analyzer. Karena itu konfigurasi diekspor sebagai fungsi async yang
+ * meng-`import()` analyzer secara **kondisional & lazy**: hanya saat
+ * `ANALYZE=true`, dan kalau paketnya memang tidak terpasang kita lanjut build
+ * tanpa analisis (peringatan, bukan crash).
+ *
+ * Next 16 mendukung ekspor fungsi: `config(phase, { defaultConfig })` di-await
+ * sebelum dinormalisasi (lihat `normalizeConfig` di next/dist/server).
+ */
+export default async function config(): Promise<NextConfig> {
+  if (process.env.ANALYZE !== 'true') return nextConfig;
+
+  try {
+    // Bentuk modul ditipekan manual karena spesifiernya bukan literal.
+    const analyzer = (await import(ANALYZER_PACKAGE)) as unknown as {
+      default: (options: { enabled: boolean }) => (config: NextConfig) => NextConfig;
+    };
+    return analyzer.default({ enabled: true })(nextConfig);
+  } catch (error) {
+    console.warn(
+      '[next.config] ANALYZE=true diabaikan: devDependency @next/bundle-analyzer ' +
+        'tidak terpasang. Jalankan `npm install` (tanpa --omit=dev) lalu coba lagi. ' +
+        `Penyebab: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return nextConfig;
+  }
+}

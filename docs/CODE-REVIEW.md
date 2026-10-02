@@ -12,10 +12,12 @@
 | --- | --- |
 | `bunx tsc --noEmit` | ✅ 0 error |
 | `bun run lint` | ✅ 0 error, 0 warning |
-| `bunx vitest run` | ✅ **226 test lulus** (23 file) — naik dari 118 (108 test baru) |
+| `bunx vitest run` | ✅ **239 test lulus** (24 file) — naik dari 118 (121 test baru) |
 | `bun audit` | ✅ **0 vulnerability** (sebelumnya 14: 4 high) |
 | `next build` (Turbopack) | ✅ sukses, route `/anime/[slug]` terdaftar sebagai dynamic |
 | `next build --webpack` | ✅ sukses (validasi tipe route Next dijalankan) |
+| `next build --webpack` **tanpa** `@next/bundle-analyzer` | ✅ sukses (P1-12) — konfigurasi tetap dimuat & lolos type-check; `ANALYZE=true` hanya memunculkan peringatan lalu build lanjut, tidak crash |
+| `node scripts/build.js --webpack` tanpa Bun di PATH | ✅ sukses (P1-12) — memakai `node_modules/.bin/{prisma,next}`, jadi `npm run build` tidak lagi butuh Bun |
 | Smoke test dev server | ✅ CSP + `x-nonce` konsisten dengan nonce di HTML, poster SVG tersaji langsung, `/ja` → **308** ke `/`, `/en` → `<html lang="en">` + `Content-Language: en`, rute lain `lang="id"` |
 | CI GitHub Actions (PR #6) | ✅ Lint & Type-check · Unit Tests · Security Audit · Build · Docker Build **hijau** |
 | Verifikasi runtime penuh (DB) | 🟡 Embedded PG **berhasil boot** lewat `SEED=1 bun run scripts/start-postgres.ts` (listen di 5433, database `anichin` dibuat) — langkah `prisma generate/migrate/seed` tetap butuh unduhan engine dari `binaries.prisma.sh` yang diblokir sandbox. Jalankan script yang sama di mesin lokal untuk uji end-to-end. |
@@ -54,7 +56,7 @@ Legenda: ✅ diperbaiki · 🟡 sebagian / perlu tindak lanjut · ⬜ belum
 | P1-9 | `package.json#prisma` deprecated + `.env` tidak dibaca CLI | ✅ | Field dihapus; `import 'dotenv/config'` di `prisma.config.ts` |
 | P1-10 | `/admin` bisa diindeks | ✅ | `src/app/admin/layout.tsx` (noindex) + `robots.ts` men-disallow `/admin`, `/auth/`, `/offline` |
 | P1-11 | Test minim di jalur kritikal | 🟡 | +51 test (route API, IP resolver, SEO builder, komponen halaman). E2E Playwright & threshold coverage belum |
-| P1-12 | `next.config.ts` import devDependency + `build.js` pakai `bunx` | ⬜ | Belum (risiko rendah; perlu diuji di lingkungan tanpa devDeps) |
+| P1-12 | `next.config.ts` import devDependency + `build.js` pakai `bunx` | ✅ | Config diekspor sebagai fungsi async + `await import()` lazy (analyzer hanya saat `ANALYZE=true`); `build.js` memakai resolver binary lokal → `bunx` → `npx`; direktori mati `/app/db` dihapus. Diverifikasi dengan devDependency dihilangkan **dan** build tanpa Bun di PATH |
 | **BARU** | `next build` **gagal**: `export { isValidEmail }` di route `reset-password` | ✅ | Ditemukan saat verifikasi build — export ilegal untuk route file; dihapus |
 | **BARU** | Poster SVG ditolak image optimizer (HTTP 400) → semua poster tampil placeholder | ✅ | `AnimeImage` menyajikan SVG/data-URI dengan `unoptimized`; 4 test baru |
 | **BARU** | `proxy.ts` mengecualikan seluruh prefix `anime/` → halaman baru tanpa security header & nonce | ✅ | Matcher dipersempit ke berkas gambar (`anime/*.{svg,png,…}`) |
@@ -64,9 +66,8 @@ Legenda: ✅ diperbaiki · 🟡 sebagian / perlu tindak lanjut · ⬜ belum
 
 ### Sisa pekerjaan (rekomendasi urutan)
 
-1. **P1-12** — `next.config.ts`: pakai `require()` lazy untuk bundle-analyzer + fallback `npx` di `scripts/build.js`.
-2. **P2** — `sw.js` cache version otomatis saat build, Dependabot, `SECURITY.md`, E2E smoke test, dan menyambungkan form komentar modal ke `/api/comments` (saat ini komentar modal hanya tersimpan di localStorage sehingga tidak pernah terlihat pengguna lain).
-3. **Kalau nanti mau pasar Jepang** — tambahkan kamus `ja` sungguhan (termasuk terjemahan judul/sinopsis dari sumber data), lalu hapus redirect `/ja` dan daftarkan `ja` di `ROUTE_LOCALES` (src/lib/i18n.ts) + hreflang/sitemap.
+1. **P2** — `sw.js` cache version otomatis saat build, Dependabot, `SECURITY.md`, E2E smoke test, dan menyambungkan form komentar modal ke `/api/comments` (saat ini komentar modal hanya tersimpan di localStorage sehingga tidak pernah terlihat pengguna lain).
+2. **Kalau nanti mau pasar Jepang** — tambahkan kamus `ja` sungguhan (termasuk terjemahan judul/sinopsis dari sumber data), lalu hapus redirect `/ja` dan daftarkan `ja` di `ROUTE_LOCALES` (src/lib/i18n.ts) + hreflang/sitemap.
 
 ---
 
@@ -233,6 +234,12 @@ Dependency tanpa satu pun import di `src/`:
 - `next.config.ts` meng-import `@next/bundle-analyzer` (devDependency) di top-level → `npm ci --omit=dev` gagal memuat config. Pakai `await import()` kondisional.
 - `scripts/build.js` memanggil `bunx prisma generate` tanpa fallback → `npm run build` gagal di lingkungan tanpa Bun (padahal README mendukung Node 20+).
 - `Dockerfile` runner masih membuat `/app/db` untuk "SQLite fallback" padahal schema PostgreSQL-only → sisa kode mati, membingungkan.
+- **Resolusi (PR ini):**
+  - `next.config.ts` sekarang mengekspor **fungsi async** (didukung Next 16: hasilnya di-`await` sebelum dinormalisasi) dan `@next/bundle-analyzer` di-`await import()` hanya saat `ANALYZE=true`. Kalau paketnya tidak ada (mis. `npm ci --omit=dev`), build tetap jalan dengan peringatan.
+  - Dua jebakan yang ditemukan saat verifikasi: (a) import dinamis dengan **string literal** tetap menabrak `TS2307` di tahap type-check `next build` — spesifiernya harus lewat variabel; (b) helper klien untuk whitelist gambar tetap dipakai, jadi `remotePatterns` tidak berubah.
+  - `scripts/build.js` memakai `scripts/lib/resolve-cli.js` (dengan unit test): binary lokal `node_modules/.bin/{prisma,next}` lebih dulu (npm/bun/pnpm), lalu `bunx`, lalu `npx --yes`. Argumen tambahan diteruskan ke `next build` (mis. `node scripts/build.js --webpack`).
+  - `Dockerfile` runner tidak lagi membuat `/app/db`; `/app/logs` tetap ada karena dipakai `src/lib/audit-log.ts` (dan di-mount `docker-compose.prod.yml`).
+  - Catatan: `ANALYZE=true` tetap butuh devDependencies terpasang — memang begitu seharusnya, karena analisis bundle hanya untuk developer/CI.
 
 ---
 
@@ -255,7 +262,7 @@ Dependency tanpa satu pun import di `src/`:
 | Sprint 1 | P0-1 (bump nodemailer/prisma), P0-2 (hapus overrides), P0-3 (health), P0-4 (IP + Redis), P0-8 (`lib/site.ts` + env) | 1-2 hari |
 | Sprint 2 | P0-5 (route `/anime/[slug]` + sitemap benar), P0-6 (Sentry client), P0-7 (locale/`lang`) | 3-5 hari |
 | Sprint 3 | P1-1…P1-5, P1-8 (Zod + pagination + index + CSP nonce + endpoint) | 3-4 hari |
-| Sprint 4 | P1-6, P1-7, P1-9…P1-12 + P2 | 2-3 hari |
+| Sprint 4 | P1-6, P1-7, P1-9…P1-11 + P2 | 2-3 hari |
 
 **Quick wins (< 1 jam, berdampak langsung):** P0-3, P0-2, P1-5, P1-9, P1-10, dan hapus dependensi tak terpakai (P1-6).
 
