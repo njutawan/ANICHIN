@@ -17,7 +17,10 @@
 | `next build` (Turbopack) | ✅ sukses, route `/anime/[slug]` terdaftar sebagai dynamic |
 | `next build --webpack` | ✅ sukses (validasi tipe route Next dijalankan) |
 | Smoke test dev server | ✅ CSP + `x-nonce` konsisten dengan nonce di HTML, `robots.txt` baru, poster SVG tersaji langsung |
+| CI GitHub Actions (PR #6) | ✅ Lint & Type-check · Unit Tests · Security Audit · Build · Docker Build **hijau** |
 | Verifikasi runtime penuh (DB) | ⛔ Tidak bisa di sandbox ini: Prisma butuh `libquery_engine` dari `binaries.prisma.sh` yang diblokir. Jalankan `bun run scripts/start-postgres.ts` di mesin lokal untuk uji end-to-end. |
+
+> Catatan CI: check **CodeQL** (default setup dari app `github-advanced-security`) gagal dalam ~3 detik pada PR ini. Ini kegagalan konfigurasi repositori (code scanning butuh GitHub Advanced Security untuk repo privat), bukan akibat perubahan kode — matikan default setup di *Settings → Code security* atau sediakan runner CodeQL bila diinginkan.
 
 > Catatan sandbox: `next/font/google` butuh akses `fonts.googleapis.com` saat build → verifikasi build memakai mock resmi Next (`NEXT_FONT_GOOGLE_MOCKED_RESPONSES`) / penggantian font sementara yang sudah dikembalikan.
 
@@ -56,6 +59,7 @@ Legenda: ✅ diperbaiki · 🟡 sebagian / perlu tindak lanjut · ⬜ belum
 | **BARU** | Poster SVG ditolak image optimizer (HTTP 400) → semua poster tampil placeholder | ✅ | `AnimeImage` menyajikan SVG/data-URI dengan `unoptimized`; 4 test baru |
 | **BARU** | `proxy.ts` mengecualikan seluruh prefix `anime/` → halaman baru tanpa security header & nonce | ✅ | Matcher dipersempit ke berkas gambar (`anime/*.{svg,png,…}`) |
 | **BARU** | `scripts/start-postgres.ts` masih era SQLite (rusak) | ✅ | Ditulis ulang untuk PostgreSQL-only + langkah seed opsional |
+| **BARU** | 4 test SEO gagal hanya di CI (`NEXTAUTH_URL` CI terbaca saat module load) | ✅ | `vi.hoisted()` menetralkan env URL di `anime-seo.test.ts`; lokal & CI hijau |
 
 ### Sisa pekerjaan (rekomendasi urutan)
 
