@@ -45,15 +45,17 @@ test.describe('Beranda', () => {
     expect(headers['x-powered-by']).toBeUndefined();
   });
 
-  test('nonce di header benar-benar dipakai script di HTML', async ({ page }) => {
-    const res = await page.goto('/');
-    const csp = res!.headers()['content-security-policy'] ?? '';
+  test('nonce di header benar-benar dipakai script di HTML', async ({ request }) => {
+    // Dibaca dari body mentah, bukan DOM: browser menyembunyikan nilai atribut
+    // `nonce` (getAttribute('nonce') selalu "") sehingga asersi DOM mustahil.
+    const res = await request.get('/', { headers: { accept: 'text/html' } });
+    const csp = res.headers()['content-security-policy'] ?? '';
     const nonce = /'nonce-([^']+)'/.exec(csp)?.[1];
     expect(nonce).toBeTruthy();
 
-    const inlineScripts = await page.locator('script[nonce]').count();
-    expect(inlineScripts).toBeGreaterThan(0);
-    await expect(page.locator('script[nonce]').first()).toHaveAttribute('nonce', nonce!);
+    const html = await res.text();
+    expect(html).toMatch(/<script[^>]*nonce=/);
+    expect(html).toContain(`nonce="${nonce}"`);
   });
 });
 
@@ -90,9 +92,14 @@ test.describe('Halaman statis & auth', () => {
 
   test('/auth/login menampilkan form login', async ({ page }) => {
     await page.goto('/auth/login');
-    await expect(page.locator('#email')).toBeVisible();
-    await expect(page.locator('#password')).toBeVisible();
-    await expect(page.getByRole('button', { name: /masuk/i })).toBeVisible();
+
+    // `:visible` supaya tahan terhadap konten Suspense yang di-stream
+    // (selama hidrasi sempat ada salinan tersembunyi di DOM).
+    await expect(page.locator('input#email:visible')).toHaveCount(1);
+    await expect(page.locator('input#password:visible')).toHaveCount(1);
+    await expect(
+      page.getByRole('button', { name: /masuk/i }).filter({ visible: true }).first()
+    ).toBeVisible();
   });
 
   test('/admin dialihkan ke login (belum ada sesi)', async ({ page }) => {

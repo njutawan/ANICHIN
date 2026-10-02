@@ -37,9 +37,14 @@ test.describe('Komentar episode lintas pengguna', () => {
     const author = await authorContext.newPage();
 
     await author.goto('/auth/login');
-    await author.fill('#email', email);
-    await author.fill('#password', password);
-    await author.getByRole('button', { name: /masuk/i }).click();
+    // `:visible` — konten di-stream, jadi bisa ada salinan tersembunyi.
+    await author.locator('input#email:visible').fill(email);
+    await author.locator('input#password:visible').fill(password);
+    await author
+      .getByRole('button', { name: /masuk/i })
+      .filter({ visible: true })
+      .first()
+      .click();
     await author.waitForURL((url) => !url.pathname.startsWith('/auth/login'), { timeout: 20_000 });
 
     // --- 3. Buka player di halaman anime kanonik --------------------------
