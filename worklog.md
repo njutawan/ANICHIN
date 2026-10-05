@@ -3573,3 +3573,66 @@ QA / Verification:
 Stage Summary:
 - Kelima item P2 yang diminta sudah ada di `main` dan terverifikasi (dengan catatan E2E hanya bisa dibuktikan di CI). Sebelas cacat/kelalaian nyata ditemukan lewat audit ulang dan sudah diperbaiki, termasuk dua bug yang terlihat pengguna (tombol Hapus ulasan mati total; beranda kosong saat DB down) dan dua bug kebenaran data (komentar baru bisa tertahan cache CDN; paginasi tidak stabil).
 - Sisa yang belum dikerjakan (bukan blocker): audit a11y/axe di CI, template issue tambahan, follow-up "likes" (butuh endpoint + buku besar per pengguna), dan pengaktifan private vulnerability reporting (butuh izin admin repo).
+
+---
+Task ID: SECURITY-PVR-CHECK
+Agent: Arena Agent Mode
+Task: Aktifkan private vulnerability reporting (PVR) untuk njutawan/ANICHIN supaya kanal utama SECURITY.md hidup.
+
+Work Log:
+- **Diagnosis (bukan asumsi):** `GET /repos/njutawan/ANICHIN/private-vulnerability-reporting` → `{"enabled":false}` (HTTP 200, jadi bisa dibaca). Aktivasi dicoba dua jalur dan keduanya ditolak:
+  - `PUT /repos/njutawan/ANICHIN/private-vulnerability-reporting` → 403 "Resource not accessible by integration" dengan `X-Accepted-Github-Permissions: administration=write`.
+  - `PATCH /repos/njutawan/ANICHIN` dengan `security_and_analysis[private_vulnerability_reporting][status]=enabled` → 403 yang sama.
+  - Artinya **bukan** token kurang scope: `repos` menunjukkan `permissions.admin=true` (App punya admin), tapi endpoint setelan keamanan ini secara desain menolak token GitHub App/integrasi (mekanisme enable PVR pertama-tama diminta untuk auth user + `administration=write`). Token di sandbox adalah App token (`X-Oauth-Client-Id: Iv23lifFg4c9eT1T6hLC`, `X-Oauth-Scopes` kosong), dan tidak ada kredensial kedua di environment (GITHUB_TOKEN = GH_TOKEN, tidak ada git credential helper/netrc).
+  - Status halaman untuk anonim: `/security/advisories/new` → **302 ke /login?return_to=...** (belum aktif), `/security/advisories` → 200. Jadi kanal (1) di SECURITY.md memang belum bisa dipakai publik.
+
+QA / Verification:
+- `bash -n` + menjalankan `scripts/setup-private-vulnerability-reporting.sh` (mode cek): melaporkan `disabled` dengan dua cara aktivasi + exit 1.
+- Menjalankan `--enable` sebagai uji jalur error: gagal terkontrol dengan pesan 403 + penjelasan izin yang dibutuhkan (bukan stack trace), exit 1.
+- Status PVR dicek ulang setelah percobaan: tetap `{"enabled":false}` (tidak ada perubahan tak sengaja).
+
+Stage Summary:
+- Aktivasi PVR **tidak bisa dilakukan dari sesi ini**: endpoint-nya menolak token integrasi dengan 403 (butuh izin Administration: write yang tidak dimiliki App/token yang tersedia). Karena ini setelan repositori, ia juga tidak bisa "dikirim sebagai kode".
+- Yang dikerjakan: helper resmi `scripts/setup-private-vulnerability-reporting.sh` (cek status, aktifkan satu perintah, pesan error 403 yang menjelaskan izin yang dibutuhkan), SECURITY.md diperbarui (status terverifikasi 2026-10-05, tautan UI langsung, izin token yang tepat), dan docs/CODE-REVIEW.md mencatat item ini sebagai satu-satunya sisa P2 dengan langkah penyelesaian.
+- **Perlu tindakan Anda (2 menit, salah satu):** (a) buka https://github.com/njutawan/ANICHIN/settings/security_analysis → Private vulnerability reporting → Enable; atau (b) beri izin **Administration: read and write** ke App Arena lalu jalankan `./scripts/setup-private-vulnerability-reporting.sh --enable`. Setelah aktif, jalankan script lagi — ia akan melaporkan `enabled`.
+
+---
+Task ID: SECURITY-PUBLISHED-CHECK
+Agent: Arena Agent Mode
+Task: Cek keamanan "jika website sudah dipublikasikan" — status publikasi + postur keamanan repo/pipeline.
+
+Work Log:
+- **Status publikasi:** `anichin.id` menyajikan **WordPress** (wp-content/uploads, permalink `/…-subtitle-indonesia/`), bukan app Next.js di repo ini; `/api/health` → nginx 404. Deploy Production run terakhir (sha 1dc96d5) sukses **tetapi** langkah Validate OAuth, Login to registry, Deploy via SSH, Run smoke tests, dan Slack semuanya **skipped** (DEPLOY_HOST/REGISTRY/NEXTAUTH_URL kosong; image `push=false`) → tidak ada host yang di-deploy.
+- **CI main merah** (run 37273826316, job Unit Tests): annotation `structured-data.test.tsx:67 AssertionError … to contain https://anichin.id/anime/shadow-blade`. Direproduksi lokal dengan env CI (`NEXTAUTH_URL=http://localhost:3000`) → `SITE_URL` jadi localhost. **Diperbaiki** (test-only) dengan menghapus `NEXT_PUBLIC_SITE_URL`/`NEXTAUTH_URL` di `vi.hoisted()` sebelum import, mengikuti pola `anime-seo.test.ts`. Commit `77fe6f8`; CI run `37274686967` → **success**.
+- **Audit repo (GitHub API):** PVR `disabled` (kanal utama SECURITY.md mati); **Dependabot alerts `disabled`** ("Dependabot alerts are disabled for this repository"); environments `production` protection_rules = 0; branch protection & secret scanning tidak bisa dibaca token integrasi (403); `gh secret list` 403.
+- **Audit history & dependency:** fetch `--unshallow` (44 commit) + semua `refs/pull/*` + 511 blob → tidak ada `.env` nyata/credential (hanya placeholder di docs/PRODUCTION-OAUTH.md); `.npmrc` tanpa `_authToken`; `gh api contents/.env` → 404; `npm audit --omit=dev` → **0 vulnerability**; suite lokal dengan stub Prisma → **33 file / 294 test hijau**, coverage 65,26/59,45/56,18/67,41 (threshold 58/52/50/60).
+- **Workflow review:** tidak ada `pull_request_target` / secret pada workflow PR; tidak ada blok `permissions:`; actions dipin ke tag mayor (bukan SHA).
+- Laporan lengkap (temuan, bukti, urutan aksi, perintah verifikasi mandiri) disimpan **di luar repo**: `/home/user/laporan-keamanan-anichin-2026-10-05.md` — sengaja tidak di-commit agar tidak menambah permukaan informasi publik.
+
+QA / Verification:
+- `NEXTAUTH_URL=http://localhost:3000 npm run test:coverage` → 33/33 file, 294/294 test, coverage di atas threshold (repro & fix).
+- CI pada commit `77fe6f8`: **success** (bukti gate hijau lagi).
+- Tidak dapat diuji dari sandbox: header HTTP/TLS/DNS/port eksternal (hanya api.github.com/kode GitHub/registry.npmjs.org yang terjangkau); situs WordPress di anichin.id tidak diuji aktif (SECURITY.md mensyaratkan izin tertulis untuk uji produksi).
+
+Stage Summary:
+- App Next.js **belum dipublikasikan**; temuan utama ada di postur repo publik (PVR & Dependabot alerts off), gate CI merah (sudah diperbaiki & hijau di CI), pipeline deploy yang "sukses" tanpa men-deploy, dan dokumen internal (worklog/CODE-REVIEW) yang ikut publik.
+- **Perlu tindakan Anda:** aktifkan PVR + Dependabot alerts di Settings → Code security; merge PR #9; putuskan pipeline deploy (isi secret atau buat gagal keras); tinjau publikasi worklog.md/CODE-REVIEW.md.
+
+---
+Task ID: SECURITY-HARDENING-WP
+Agent: Arena Agent Mode
+Task: (1) Hardening workflow repo publik (T-5) + deploy gagal keras (T-4); (2) audit pasif situs WordPress anichin.id atas izin pemilik.
+
+Work Log:
+- **Hardening (commit `c989c34`):** `permissions: contents: read` di `ci.yml`/`deploy.yml`/`staging.yml` (job CodeQL tetap menimpa dengan `security-events: write`); **36 referensi action dipin ke commit SHA** (checkout, setup-bun, cache, upload-artifact, codeql init/analyze, setup-buildx, login, build-push, slack) memakai tag sebagai komentar; `deploy.yml` kini membaca repository variable `BUILD_ONLY` dan punya **guard** yang `exit 1` bila `DEPLOY_HOST` kosong — sebelumnya langkah deploy/smoke hanya di-skip sehingga push ke `main` tampak hijau padahal tidak men-deploy. CI run `37276422202` (commit `c989c34`): **success**.
+- **Audit pasif WordPress** (izin pemilik, hanya GET/HEAD ke URL publik, tanpa fuzzing/payload) dijalankan dari runner CI sementara karena sandbox tidak punya akses internet; workflow sementara sudah dihapus dari repo. Temuan & bukti lengkap ada di laporan privat `/home/user/laporan-keamanan-anichin-2026-10-05.md` §7 (sengaja tidak ditulis di repo publik).
+- Ringkas: HTTPS/HSTS/TLS/HTTP-3 + WAF Cloudflare (wp-login challenge, xmlrpc 403, uploads 403) + berkas sensitif 404 = baik; temuan utama: **tanpa SPF/DMARC/MX** (padahal app mengirim email dari domain itu) dan **enumerasi user + hash gravatar admin** via `wp-json/wp/v2/users`; plus header keamanan minim, fingerprint versi, dan catatan verifikasi provenance tema/plugin.
+- Catatan: token otomasi tidak bisa menghapus run Actions sementara (403); ID run dicatat di laporan untuk dihapus manual bila diinginkan.
+
+QA / Verification:
+- Ketiga YAML di-parse sebelum push (`js-yaml`); CI `c989c34` hijau (permissions + pin + test).
+- Seluruh hasil probe WP dibaca dari anotasi check-run (bukan asumsi); dua probe awal gagal/kosong dan diperbaiki (YAML invalid, pesan anotasi kosong, batas 10 anotasi per step).
+
+Stage Summary:
+- Hardening repo selesai & terverifikasi CI. Audit WordPress selesai secara pasif dengan bukti mentah; laporan privat diperbarui (TL;DR, §6 urutan aksi, §7 detail WP).
+- **Perlu tindakan Anda:** aktifkan PVR + Dependabot alerts; merge PR #9; putuskan pipeline deploy (isi secret atau set `BUILD_ONLY=true`); tambah SPF/DKIM/DMARC; batasi endpoint users WP; pasang header keamanan di Cloudflare.

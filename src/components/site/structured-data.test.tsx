@@ -7,14 +7,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-const { dbMock, loggerMock, headersMock } = vi.hoisted(() => ({
-  dbMock: {
-    anime: { findMany: vi.fn() },
-    serverReview: { groupBy: vi.fn(), findMany: vi.fn() },
-  },
-  loggerMock: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
-  headersMock: vi.fn(),
-}));
+const { dbMock, loggerMock, headersMock } = vi.hoisted(() => {
+  // `SITE_URL` (src/lib/site.ts) dibaca saat module load: CI menyetel
+  // NEXTAUTH_URL=http://localhost:3000 dan developer bisa punya .env sendiri,
+  // jadi netralkan env *sebelum* import agar assertion URL absolut di bawah
+  // menguji fallback DEFAULT_SITE_URL (deterministik di lokal maupun CI).
+  // Tanpa ini, suite gagal di CI → job "Unit Tests" merah di main.
+  delete process.env.NEXT_PUBLIC_SITE_URL;
+  delete process.env.NEXTAUTH_URL;
+
+  return {
+    dbMock: {
+      anime: { findMany: vi.fn() },
+      serverReview: { groupBy: vi.fn(), findMany: vi.fn() },
+    },
+    loggerMock: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+    headersMock: vi.fn(),
+  };
+});
 
 vi.mock('@/lib/db', () => ({ db: dbMock }));
 vi.mock('@/lib/logger', () => ({ logger: loggerMock }));

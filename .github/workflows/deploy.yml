@@ -2,6 +2,10 @@
 # AniChin — Production Deploy Pipeline
 # Triggered: push to main, manual dispatch
 # Features: build → push image → migrate DB → deploy → health check → rollback on fail
+#
+# Catatan perilaku: kalau `DEPLOY_HOST` belum diset, job ini GAGAL (bukan
+# hijau-palsu). Untuk sengaja menjalankan build-only, set repository variable
+# `BUILD_ONLY=true` (Settings → Secrets and variables → Actions → Variables).
 # ============================================================================
 name: Deploy Production
 
@@ -28,6 +32,11 @@ concurrency:
   group: deploy-${{ github.event.inputs.environment || 'production' }}
   cancel-in-progress: false
 
+# Token hanya butuh membaca repo: image di-push memakai kredensial registry
+# (secrets.REGISTRY_USER/PASS), bukan GITHUB_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   deploy:
     name: 🚀 Deploy to ${{ github.event.inputs.environment || 'production' }}
@@ -36,7 +45,7 @@ jobs:
     environment:
       name: ${{ github.event.inputs.environment || 'production' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # ── Preflight: decide which optional stages can run ─────
       # NOTE: `env.X` set on a step is NOT visible in that same step's `if:`,
@@ -50,17 +59,33 @@ jobs:
           REGISTRY: ${{ secrets.REGISTRY }}
           NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          # Escape hatch eksplisit: repository variable (bukan secret).
+          BUILD_ONLY: ${{ vars.BUILD_ONLY }}
         run: |
           flag() { [ -n "$2" ] && echo "$1=true" || echo "$1=false"; }
           {
-            flag deploy   "$DEPLOY_HOST"
-            flag registry "$REGISTRY"
-            flag smoke    "$NEXTAUTH_URL"
-            flag slack    "$SLACK_WEBHOOK"
+            flag deploy     "$DEPLOY_HOST"
+            flag registry   "$REGISTRY"
+            flag smoke      "$NEXTAUTH_URL"
+            flag slack      "$SLACK_WEBHOOK"
+            flag build_only "$BUILD_ONLY"
           } | tee -a "$GITHUB_OUTPUT"
           if [ -z "$DEPLOY_HOST" ]; then
-            echo "::warning::DEPLOY_HOST secret is not set - the pipeline will only build the image (no SSH deploy)."
+            echo "::warning::DEPLOY_HOST secret is not set - the pipeline can only build the image (no SSH deploy)."
           fi
+
+      # ── Guard: jangan lapor "sukses" kalau tidak men-deploy ──
+      # Sebelumnya, tanpa DEPLOY_HOST langkah Deploy/SSH + smoke test hanya
+      # di-skip sehingga run terlihat hijau padahal image berhenti di runner
+      # (tidak ada server yang di-deploy, tidak ada yang diuji).
+      # Sekarang push ke main GAGAL sampai salah satu dipilih:
+      #   1. isi secret DEPLOY_HOST/DEPLOY_USER/DEPLOY_SSH_KEY (+ NEXTAUTH_URL), atau
+      #   2. set repository variable BUILD_ONLY=true kalau memang build-only.
+      - name: ❌ Guard — target deploy terkonfigurasi
+        if: github.event.inputs.rollback != 'true' && steps.preflight.outputs.deploy != 'true' && steps.preflight.outputs.build_only != 'true'
+        run: |
+          echo "::error title=Deploy tidak dikonfigurasi::DEPLOY_HOST belum diset sehingga hanya image yang di-build — tidak ada server yang di-deploy dan smoke test tidak berjalan. Isi secret deploy, atau set repository variable BUILD_ONLY=true bila memang ingin build-only."
+          exit 1
 
       # ── Pre-deploy: validate OAuth secrets are set ──────────
       - name: 🔍 Validate OAuth configuration
@@ -155,7 +180,7 @@ jobs:
       # ── Normal deploy path ─────────────────────────────────
       - name: Setup Bun
         if: github.event.inputs.rollback != 'true'
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
 
@@ -172,11 +197,11 @@ jobs:
 
       - name: Set up Docker Buildx
         if: github.event.inputs.rollback != 'true'
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Login to registry
         if: github.event.inputs.rollback != 'true' && steps.preflight.outputs.registry == 'true'
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ${{ secrets.REGISTRY }}
           username: ${{ secrets.REGISTRY_USER }}
@@ -184,7 +209,7 @@ jobs:
 
       - name: Build & push production image
         if: github.event.inputs.rollback != 'true'
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: ./Dockerfile
@@ -294,7 +319,7 @@ jobs:
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
           ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
-        uses: slackapi/slack-github-action@v4.0.0
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
         with:
           payload: |
             {
@@ -308,7 +333,7 @@ jobs:
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
           ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
-        uses: slackapi/slack-github-action@v4.0.0
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
         with:
           payload: |
             {
