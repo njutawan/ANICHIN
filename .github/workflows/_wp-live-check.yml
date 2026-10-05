@@ -16,25 +16,36 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: "d1 plain"
-        run: echo "::warning title=d1::hello world"
-      - name: "d2 tanpa title"
-        run: echo "::warning::pesan tanpa title"
-      - name: "d3 pipe & tanda"
-        run: echo "::warning title=d3::a | b : c <d> & 'e' \"f\""
-      - name: "d4 persen"
-        run: echo "::warning title=d4::100%25 dan %2525"
-      - name: "d5 multiline escaped"
+      - name: d1 plain
         run: |
-          msg="baris1%0Abaris2%0Abaris3"
-          echo "::warning title=d5::$msg"
-      - name: "d6 panjang"
+          echo "::warning title=d1::hello world"
+      - name: d2 tanpa title
+        run: |
+          echo "::warning::pesan tanpa title"
+      - name: d3 pipe dan tanda
+        run: |
+          echo "::warning title=d3::a | b : c <d> & e"
+      - name: d4 persen
+        run: |
+          echo "::warning title=d4::100%25 dan %2525"
+      - name: d5 multiline escaped
+        run: |
+          echo "::warning title=d5::baris1%0Abaris2%0Abaris3"
+      - name: d6 panjang
         run: |
           msg=$(printf 'L%s' $(seq 1 400))
           echo "::warning title=d6::$msg"
-      - name: "d7 banyak pesan satu step"
+      - name: d7 banyak pesan satu step
         run: |
           for i in 1 2 3 4 5 6 7 8 9 10 11 12; do echo "::warning title=d7-$i::pesan $i"; done
-      - name: "d8 error"
-        run: echo "::error title=d8::pesan error"
+      - name: d8 judul seperti chunk
+        run: |
+          echo "::warning title=wp 1/5 (baris 1-22 dari 108)::status: 200 http=2"
+      - name: d9 ringkasan gabungan
+        run: |
+          msg=$(printf '%s%%0A' "satu=1" "dua=2" "tiga=3")
+          echo "::warning title=d9::$msg"
+      - name: d10 error lanjut
         continue-on-error: true
+        run: |
+          echo "::error title=d10::pesan error"
