@@ -6,14 +6,25 @@ import { sanitizeUserText } from '@/lib/security';
 import { getClientIp } from '@/lib/ip';
 import { auditLog } from '@/lib/audit-log';
 import {
+  animeSlugSchema,
   commentPayloadSchema,
   firstIssueMessage,
   episodeNumberSchema,
   listQuerySchema,
   COMMENT_MAX_LENGTH,
 } from '@/lib/validation';
+import { isRecordNotFound } from '@/lib/prisma-errors';
 
-const CACHE_HEADERS = { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300' };
+/**
+ * Daftar komentar = konten buatan pengguna, jadi **tidak boleh di-cache**.
+ *
+ * Sebelumnya `public, s-maxage=60, stale-while-revalidate=300`: di deployment
+ * ber-CDN (Vercel) komentar yang baru dikirim penulisnya sendiri bisa tidak
+ * muncul sampai ~1 menit, karena refetch setelah POST mengambil salinan CDN
+ * dengan URL yang sama. Permintaan daftar komentar kecil dan jarang, jadi
+ * melepas cache CDN adalah trade-off yang benar.
+ */
+const NO_STORE = { 'Cache-Control': 'no-store' };
 
 // GET comments for an episode (dengan paginasi cursor)
 export async function GET(req: NextRequest) {
@@ -30,12 +41,16 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ comments: [], hasMore: false, nextCursor: null });
     }
 
+    // Slug divalidasi dengan skema yang sama seperti POST (dan GET /api/reviews)
+    // supaya bentuk input yang diterima konsisten — sebelumnya slug apa pun
+    // diteruskan mentah ke query.
     const episode = episodeNumberSchema.safeParse(Number(rawEpisode));
+    const slug = animeSlugSchema.safeParse(animeSlug);
     const listParams = listQuerySchema.safeParse({
       limit: searchParams.get('limit') ?? undefined,
       cursor: searchParams.get('cursor') ?? undefined,
     });
-    if (!episode.success || !listParams.success) {
+    if (!episode.success || !slug.success || !listParams.success) {
       return NextResponse.json({ error: 'Parameter tidak valid.' }, { status: 400 });
     }
 
@@ -43,22 +58,40 @@ export async function GET(req: NextRequest) {
 
     // Ambil limit + 1 baris untuk mendeteksi apakah masih ada halaman berikutnya
     // tanpa query COUNT terpisah.
-    const rows = await db.serverComment.findMany({
-      where: { animeSlug, episodeNumber: episode.data },
-      orderBy: { createdAt: 'desc' },
-      take: limit + 1,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-      include: {
-        user: { select: { name: true, avatar: true } },
-      },
-    });
+    //
+    // `orderBy` memakai kunci majemuk (createdAt + id): beberapa komentar bisa
+    // dibuat pada milidetik yang sama (seed/impor), dan tanpa tie-breaker urutan
+    // antar halaman tidak stabil → baris bisa terlewat atau tampil dua kali.
+    let rows;
+    try {
+      rows = await db.serverComment.findMany({
+        where: { animeSlug: slug.data, episodeNumber: episode.data },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+        include: {
+          user: { select: { name: true, avatar: true } },
+        },
+      });
+    } catch (err) {
+      // Cursor menunjuk komentar yang sudah tidak ada (mis. dihapus penulisnya
+      // saat pembaca membuka halaman berikutnya) — itu request tidak valid,
+      // bukan kegagalan server. Sebelumnya berakhir sebagai 500.
+      if (cursor && isRecordNotFound(err)) {
+        return NextResponse.json(
+          { error: 'Cursor sudah tidak valid. Muat ulang daftar komentar.' },
+          { status: 400 }
+        );
+      }
+      throw err;
+    }
 
     const hasMore = rows.length > limit;
     const comments = hasMore ? rows.slice(0, limit) : rows;
     const nextCursor = hasMore ? comments[comments.length - 1]?.id ?? null : null;
 
     return addRateLimitHeaders(
-      NextResponse.json({ comments, hasMore, nextCursor }, { headers: CACHE_HEADERS }),
+      NextResponse.json({ comments, hasMore, nextCursor }, { headers: NO_STORE }),
       'read'
     );
   } catch {

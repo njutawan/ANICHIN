@@ -38,11 +38,13 @@ anime catalog including TV series, movies, OVAs, and ONAs.
 
 ## Pages
 - Homepage: https://anichin.id
+- Anime detail (canonical, server-rendered): https://anichin.id/anime/{slug}
 - Anime List: https://anichin.id/#list
 - Schedule: https://anichin.id/#schedule
 - Genres: https://anichin.id/#genres
 - Login: https://anichin.id/auth/login
 - Register: https://anichin.id/auth/register
+- English homepage: https://anichin.id/en
 
 ## API (for AI consumption)
 - Health: https://anichin.id/api/health

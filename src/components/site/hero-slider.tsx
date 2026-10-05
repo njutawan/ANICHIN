@@ -1,4 +1,5 @@
 import { db } from '@/lib/db';
+import { logger } from '@/lib/logger';
 import { HeroSliderClient } from './hero-slider-client';
 import type { AnimeCardData } from '@/lib/types';
 
@@ -7,8 +8,26 @@ import type { AnimeCardData } from '@/lib/types';
  * Renders H1 + slide images in SSR HTML (Google can read without JS).
  *
  * Passes data to client component for slide navigation interactivity.
+ *
+ * Ketahanan (follow-up P1-4): kalau database tidak tersedia, komponen ini
+ * mengembalikan `null` **tanpa melempar error**. Sebelumnya kegagalan query
+ * membuat React error boundary mengambil alih seluruh beranda, sehingga HTML
+ * yang terkirim ke crawler hanya berisi skip-link — halaman "tampak 200" tapi
+ * kosong. Sekarang hanya hero yang hilang; bagian lain beranda tetap dirender.
  */
 export async function HeroSlider() {
+  try {
+    return await renderHeroSlider();
+  } catch (err) {
+    logger.error('HeroSlider: gagal memuat anime unggulan — hero dilewati', {
+      error: err instanceof Error ? err.message : 'unknown',
+      module: 'components/site/hero-slider',
+    });
+    return null;
+  }
+}
+
+async function renderHeroSlider() {
   const featured = await db.anime.findMany({
     where: {
       OR: [{ featured: true }, { trending: true }],

@@ -64,18 +64,26 @@ Legenda: ✅ diperbaiki · 🟡 sebagian / perlu tindak lanjut · ⬜ belum
 | **BARU** | `scripts/start-postgres.ts` masih era SQLite (rusak) | ✅ | Ditulis ulang untuk PostgreSQL-only + langkah seed opsional |
 | **BARU** | Script di atas **tetap tidak jalan** meski sudah ditulis ulang: opsi `pgPort` tidak dikenal `embedded-postgres` (namanya `port`) sehingga PG listen di 5432 sementara `.env` menunjuk 5433, dan `user`/`password` tidak pernah diteruskan sehingga kredensial `anichin` tidak ada | ✅ | Opsi diperbaiki (`port`/`user`/`password`/`authMethod`); diverifikasi dengan menjalankan script: PG listen di **5433**, database `anichin` dibuat |
 | **BARU** | 4 test SEO gagal hanya di CI (`NEXTAUTH_URL` CI terbaca saat module load) | ✅ | `vi.hoisted()` menetralkan env URL di `anime-seo.test.ts`; lokal & CI hijau |
+| **P2 lanjutan** | Daftar komentar/ulasan di-cache CDN (`s-maxage=60`) → komentar yang baru dikirim bisa tidak terlihat sampai ~1 menit (termasuk oleh penulisnya) | ✅ | Kedua GET memakai `Cache-Control: no-store`; paginasi memakai urutan stabil `[{createdAt:'desc'},{id:'desc'}]` (sebelumnya kunci tunggal → baris bisa terlewat/ganda antar halaman); cursor tak dikenal kini `400` (bukan `500`) lewat helper `src/lib/prisma-errors.ts`; slug GET komentar divalidasi seperti POST |
+| **P2 lanjutan** | `DELETE /api/reviews` tidak ada, tapi tombol "Hapus" memanggilnya — dan syarat tampilnya salah (`session.user.id === review.user.name`) sehingga penulis tidak pernah bisa menghapus ulasannya sendiri | ✅ | Route baru `src/app/api/reviews/[id]/route.ts` (penulis/admin; 403/404/400/429 konsisten dengan komentar) + `reviews-tab.tsx` memakai `review.userId`, memanggil endpoint baru, dan menampilkan pesan error (sebelumnya respons gagal diabaikan tanpa toast) |
+| **P2 lanjutan** | Beranda kehilangan hampir seluruh HTML saat DB down (`hero-slider` & `structured-data` melempar → error boundary) | ✅ | Keduanya dengan fallback: hero `null` + log, JSON-LD tetap statis (breadcrumb/FAQ); `/en` ikut sehat karena memakai komponen yang sama |
+| **P2 lanjutan** | `structured-data.tsx` masih memakai URL lama `/?anime=<slug>` (canonical = beranda) untuk `url` JSON-LD | ✅ | Kini `${SITE_URL}/anime/<slug>` (`animeUrl()`); test mengunci `https://anichin.id/anime/shadow-blade` |
+| **P2 lanjutan** | CI mengunggah artefak `coverage/` yang **tidak pernah dibuat** (tidak ada provider coverage/threshold) | ✅ | `@vitest/coverage-v8` + `coverage.thresholds` (58/52/50/60, sedikit di bawah hasil nyata 65,5%/59,2%/56,3%/67,7%) + skrip `test:coverage` yang dipakai job `test`; artefak kini berisi `lcov.info` + `lcov-report/` |
+| **P2 lanjutan** | Repo hygiene: template PR/issue & CODEOWNERS belum ada; **private vulnerability reporting repo ini masih `disabled`** padahal itu kanal utama di `SECURITY.md` | ✅ | `CODEOWNERS`, `pull_request_template.md`, `ISSUE_TEMPLATE/{config,bug_report}.yml` (mengarahkan kerentanan ke advisory, bukan issue publik) + `SECURITY.md` kini menjelaskan cara maintainer mengaktifkan PVR dan kanal fallback-nya. **Perlu tindakan Anda:** aktifkan PVR di Settings → Code security (API menolak dengan 403 untuk token ini) |
+| **P2 lanjutan** | Klaim palsu UI: label "Suka" selalu tampil di komentar walau tidak bisa diklik (tidak ada endpoint likes) | ✅ | Chip suka hanya dirender kalau `likes > 0`; test mengunci perilakunya |
+| **P2 lanjutan** | `ai.txt`/`llms.txt` tidak menyebut rute kanonik `/anime/<slug>`; `ai.txt` meng-disallow `/api/admin/` (noise — robots + auth sudah menutupnya) | ✅ | Keduanya diperbarui. Catatan: klaim fitur **download** ternyata **akurat** (tab Download + `download480/720/1080` ada di produk) sehingga tidak dihapus |
 
 ### Sisa pekerjaan (rekomendasi urutan)
 
-1. **Temuan baru saat P2 (belum dikerjakan):**
-   - Beranda **tetap 200** tanpa database, tapi isinya tidak ter-render di server: `hero-slider.tsx` & `structured-data.tsx` masih memanggil DB langsung tanpa fallback sehingga boundary Suspense jatuh ke error boundary (bukti: HTML hanya berisi skip-link saat engine Prisma tidak ada). Keduanya sudah ditandai sebagai follow-up P1-4 — sekarang dampaknya terukur.
-   - `DELETE /api/reviews` **tidak ada**, padahal UI ulasan menampilkan tombol Hapus (memanggil endpoint itu) → perlu handler serupa `DELETE /api/comments/[id]`.
-   - Threshold coverage Vitest belum diisi; template PR/issue & CODEOWNERS belum ada.
+1. **Temuan baru saat P2 — sudah dikerjakan semua (lihat tabel di bawah):**
+   - ~~Beranda **tetap 200** tanpa database, tapi isinya tidak ter-render di server~~ → ✅ `hero-slider.tsx` & `structured-data.tsx` sekarang punya fallback (hero dilewati + JSON-LD statis) sehingga beranda tidak lagi jatuh ke error boundary. 4 test baru.
+   - ~~`DELETE /api/reviews` **tidak ada**, padahal UI ulasan menampilkan tombol Hapus~~ → ✅ route `DELETE /api/reviews/[id]` + UI diperbaiki (9 test).
+   - ~~Threshold coverage Vitest belum diisi; template PR/issue & CODEOWNERS belum ada~~ → ✅ `@vitest/coverage-v8` + threshold + `test:coverage` dipakai CI; `CODEOWNERS`, template PR, dan template issue ditambahkan.
 2. **Kalau nanti mau pasar Jepang** — tambahkan kamus `ja` sungguhan (termasuk terjemahan judul/sinopsis dari sumber data), lalu hapus redirect `/ja` dan daftarkan `ja` di `ROUTE_LOCALES` (src/lib/i18n.ts) + hreflang/sitemap.
 
 ---
 
-**Yang sudah bagus dan jangan diutak-atik tanpa alasan:** 2FA (TOTP + backup code terenkripsi AES-256-GCM), rate limiting 3-tier + login lockout, CSP nonce, 9 security header di `src/proxy.ts`, anti-enumeration di auth, audit log, `requireAdmin()` di semua route admin, multi-stage Dockerfile + healthcheck, dan `docs/` yang lumayan rapi.
+**Yang sudah bagus dan jangan diutak-atik tanpa alasan:** 2FA (TOTP + backup code terenkripsi AES-256-GCM), rate limiting 3-tier + login lockout, CSP nonce, 11 security header di `src/proxy.ts`, anti-enumeration di auth, audit log, `requireAdmin()` di semua route admin, multi-stage Dockerfile + healthcheck, dan `docs/` yang lumayan rapi.
 
 ---
 
@@ -255,15 +263,17 @@ Dependency tanpa satu pun import di `src/`:
   - **Resolusi (PR ini):** `src/components/site/episode-comments.tsx` membaca daftar dari `GET /api/comments` (cursor pagination, tombol "Muat komentar lama"), mengirim lewat `POST /api/comments`, dan menghapus lewat route baru `DELETE /api/comments/[id]` (hanya penulis atau admin; 403 untuk yang lain). Form dinonaktifkan + tautan login kalau belum masuk (komentar butuh akun, sama seperti ulasan). Store lokal hanya menyimpan jejak aktivitas untuk pencapaian, bukan lagi sumber daftar. Tombol "Suka" dihapus karena `likes` tidak punya endpoint/buku besar per pengguna — menampilkannya hanya akan menyesatkan (follow-up).
   - Sekaligus memperbaiki: modal player/komentar kini juga dipasang di halaman kanonik `/anime/[slug]` — sebelumnya hanya ada di beranda, sehingga tombol "Tonton Sekarang" di halaman anime tidak pernah membuka apa pun.
   - Test: 8 test komponen + 8 test route DELETE.
+  - **P2 lanjutan (audit ulang alur ini):** daftar komentar tadinya masih di-cache CDN (`s-maxage=60`) sehingga komentar baru bisa tertahan ~1 menit; paginasi memakai `orderBy` tunggal (`createdAt`) sehingga baris bisa terlewat/ganda antar halaman; cursor yang sudah dihapus berakhir `500`; dan label "Suka" selalu tampil walau tidak bisa diklik. Semua sudah diperbaiki (lihat tabel di atas) + 7 test baru.
 - **`public/ai.txt` & `llms.txt`** mengklaim fitur "download anime"; pastikan sinkron dengan produk (dan `ai.txt` mendaftar `/api/admin/` yang tidak pernah di-crawl AI — tidak berbahaya, hanya noise).
+  - **Resolusi (P2 lanjutan):** klaim download **diverifikasi akurat** (tab Download + `download480/720/1080` ada di produk & seed), jadi tidak dihapus. Yang diperbarui: rute kanonik `/anime/<slug>` didaftarkan di kedua berkas, `/api/admin/` dibuang dari `ai.txt`.
 - **`sanitizeComment` ganda:** logika pembersihan ditulis ulang di `api/comments` & `api/reviews` (dan util di `lib/security.ts` dipakai client). Satukan agar tidak ada dua definisi yang bisa berbeda.
 - **Repo hygiene:** tidak ada `.github/dependabot.yml`, `SECURITY.md`, template PR/issue, `CODEOWNERS`. Untuk proyek dengan banyak secret & deploy pipeline, Dependabot + SECURITY.md murah dan berguna.
-  - **Resolusi (PR ini):** `.github/dependabot.yml` ditambahkan — **ekosistem `bun`** (bukan `npm`, karena repo ini hanya punya `bun.lock`; ekosistem npm tidak bisa memperbarui lockfile Bun sehingga CI `--frozen-lockfile` akan gagal), plus `github-actions` + `docker` (base image), grup minor/patch, dan ignore major `node` di image runner. `SECURITY.md` ditulis (lingkup, kanal pelaporan, target respons, safe harbor). Catatan: Dependabot hanya membaca konfigurasi dari branch **default** → aktif setelah merge; security update otomatis untuk ekosistem `bun` belum didukung GitHub, jadi advisory produksi tetap dijaga `bun audit --production` di CI. Template PR/issue & CODEOWNERS belum dikerjakan.
+  - **Resolusi (PR ini):** `.github/dependabot.yml` ditambahkan — **ekosistem `bun`** (bukan `npm`, karena repo ini hanya punya `bun.lock`; ekosistem npm tidak bisa memperbarui lockfile Bun sehingga CI `--frozen-lockfile` akan gagal), plus `github-actions` + `docker` (base image), grup minor/patch, dan ignore major `node` di image runner. `SECURITY.md` ditulis (lingkup, kanal pelaporan, target respons, safe harbor). Catatan: Dependabot hanya membaca konfigurasi dari branch **default** → aktif setelah merge; security update otomatis untuk ekosistem `bun` belum didukung GitHub, jadi advisory produksi tetap dijaga `bun audit --production` di CI. Template PR/issue & CODEOWNERS sudah ditambahkan; **private vulnerability reporting** repo masih `disabled` (diverifikasi lewat API, token tanpa izin admin) sehingga kanal utama `SECURITY.md` belum bisa dipakai — sudah dicatat di dokumen + arahan untuk maintainer.
 - **`.env.example`:** belum mendokumentasikan `NEXT_PUBLIC_SITE_URL`, `IP_HASH_SALT`, `DEPLOY_TARGET` untuk Vercel, dsb.
 - **`Caddyfile`/compose:** pastikan `trusted_proxies` di-set agar XFF tidak bisa dipalsukan (lihat P0-4).
 - **A11y:** setelah `lang` per-locale diperbaiki, pertimbangkan audit `axe` di CI (beberapa dialog Radix perlu `aria-describedby` eksplisit).
 - **Test:** E2E/Playwright belum ada (hanya 10 file unit).
-  - **Resolusi (PR ini):** `playwright.config.ts` + `e2e/smoke.spec.ts` (23 test, jalan di build produksi) + `e2e/comments.spec.ts` (alur komentar lintas pengguna, `E2E_WITH_DB=1`) dan job CI `🎭 E2E (Playwright)` dengan PostgreSQL ter-seed. Threshold coverage Vitest masih belum diisi.
+  - **Resolusi (PR ini):** `playwright.config.ts` + `e2e/smoke.spec.ts` (23 test, jalan di build produksi) + `e2e/comments.spec.ts` (alur komentar lintas pengguna, `E2E_WITH_DB=1`) dan job CI `🎭 E2E (Playwright)` dengan PostgreSQL ter-seed. Threshold coverage Vitest kini diisi (`@vitest/coverage-v8`, thresholds 58/52/50/60 di `vitest.config.ts`) dan job `test` memakai `bun run test:coverage` sehingga artefak `coverage/` benar-benar berisi.
 
 ---
 
@@ -285,7 +295,7 @@ cp .env.example .env            # isi DATABASE_URL, NEXTAUTH_SECRET
 bun install
 bunx prisma generate
 bun run lint && bunx tsc --noEmit
-bun run test
+bun run test              # atau: bun run test:coverage (menegakkan threshold)
 bun run build                   # atau: DEPLOY_TARGET=standalone bun run build
 npm audit --omit=dev
 docker compose -f docker-compose.prod.yml config   # validasi env compose

@@ -114,8 +114,11 @@ jobs:
         env:
           DATABASE_URL: ${{ env.CI_DATABASE_URL }}
 
-      - name: Run tests
-        run: bun run test
+      - name: Run tests (+ coverage threshold)
+        # `test:coverage` menjalankan suite yang sama sekaligus menegakkan
+        # threshold di vitest.config.ts dan menghasilkan `coverage/` untuk
+        # artefak di langkah berikutnya (sebelumnya folder itu selalu kosong).
+        run: bun run test:coverage
         env:
           DATABASE_URL: ${{ env.CI_DATABASE_URL }}
           NEXTAUTH_SECRET: ${{ env.CI_NEXTAUTH_SECRET }}

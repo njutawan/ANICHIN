@@ -102,6 +102,48 @@ describe('GET /api/comments', () => {
     );
     expect(res.status).toBe(400);
   });
+
+  it('menolak slug tidak valid (konsisten dengan POST)', async () => {
+    for (const bad of ['../etc/passwd', 'Shadow_Blade', 'a b', 'x'.repeat(201)]) {
+      const res = await getComments(
+        new NextRequest(
+          `http://localhost/api/comments?animeSlug=${encodeURIComponent(bad)}&episodeNumber=1`
+        )
+      );
+      expect(res.status, `slug: ${bad}`).toBe(400);
+      expect(dbMock.serverComment.findMany).not.toHaveBeenCalled();
+    }
+  });
+
+  it('memakai urutan stabil (createdAt + id) supaya paginasi tidak melewatkan baris', async () => {
+    dbMock.serverComment.findMany.mockResolvedValue([{ id: 'c1' }]);
+    await getComments(
+      new NextRequest('http://localhost/api/comments?animeSlug=shadow-blade&episodeNumber=1')
+    );
+    expect(dbMock.serverComment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] })
+    );
+  });
+
+  it('cursor yang sudah tidak ada → 400 (bukan 500)', async () => {
+    dbMock.serverComment.findMany.mockRejectedValue(
+      Object.assign(new Error('cursor not found'), { code: 'P2025' })
+    );
+    const res = await getComments(
+      new NextRequest(
+        'http://localhost/api/comments?animeSlug=shadow-blade&episodeNumber=1&cursor=hilang'
+      )
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('daftar komentar tidak di-cache CDN (komentar baru langsung terlihat)', async () => {
+    dbMock.serverComment.findMany.mockResolvedValue([]);
+    const res = await getComments(
+      new NextRequest('http://localhost/api/comments?animeSlug=shadow-blade&episodeNumber=1')
+    );
+    expect(res.headers.get('Cache-Control')).toBe('no-store');
+  });
 });
 
 describe('POST /api/comments', () => {
@@ -178,6 +220,32 @@ describe('GET /api/reviews', () => {
     expect(body.reviews).toHaveLength(1);
     expect(body.hasMore).toBe(true);
     expect(body.nextCursor).toBe('r1');
+  });
+
+  it('memakai urutan stabil (createdAt + id)', async () => {
+    dbMock.serverReview.findMany.mockResolvedValue([]);
+    await getReviews(new NextRequest('http://localhost/api/reviews?animeSlug=shadow-blade'));
+    expect(dbMock.serverReview.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] })
+    );
+  });
+
+  it('cursor yang sudah tidak ada → 400 (bukan 500)', async () => {
+    dbMock.serverReview.findMany.mockRejectedValue(
+      Object.assign(new Error('cursor not found'), { code: 'P2025' })
+    );
+    const res = await getReviews(
+      new NextRequest('http://localhost/api/reviews?animeSlug=shadow-blade&cursor=hilang')
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('daftar ulasan tidak di-cache CDN', async () => {
+    dbMock.serverReview.findMany.mockResolvedValue([]);
+    const res = await getReviews(
+      new NextRequest('http://localhost/api/reviews?animeSlug=shadow-blade')
+    );
+    expect(res.headers.get('Cache-Control')).toBe('no-store');
   });
 });
 

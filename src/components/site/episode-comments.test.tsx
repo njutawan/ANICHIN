@@ -91,6 +91,19 @@ describe('<EpisodeComments /> — daftar dari server', () => {
     renderComments();
     expect(await screen.findByText(/gagal memuat komentar/i)).toBeInTheDocument();
   });
+
+  it('tidak menampilkan label "Suka" palsu saat jumlah suka 0', async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      jsonResponse({ comments: [OTHER_USER_COMMENT, MY_COMMENT], hasMore: false, nextCursor: null })
+    );
+
+    renderComments();
+
+    // Yang punya 3 suka tampil sebagai angka…
+    expect(await screen.findByText('3')).toBeInTheDocument();
+    // …dan yang 0 tidak memunculkan afinitas tombol yang tidak bisa diklik.
+    expect(screen.queryByText(/^suka$/i)).not.toBeInTheDocument();
+  });
 });
 
 describe('<EpisodeComments /> — kirim komentar', () => {

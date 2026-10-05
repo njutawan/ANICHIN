@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { requireUser } from '@/lib/session';
 import { checkRateLimit, addRateLimitHeaders } from '@/lib/rate-limit';
+import { isRecordNotFound } from '@/lib/prisma-errors';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,7 +48,15 @@ export async function DELETE(
       );
     }
 
-    await db.serverComment.delete({ where: { id } });
+    try {
+      await db.serverComment.delete({ where: { id } });
+    } catch (err) {
+      // Balapan: perangkat lain sudah menghapus komentar ini lebih dulu.
+      if (isRecordNotFound(err)) {
+        return NextResponse.json({ error: 'Komentar sudah dihapus.' }, { status: 404 });
+      }
+      throw err;
+    }
 
     return addRateLimitHeaders(NextResponse.json({ ok: true, id }), 'search');
   } catch {

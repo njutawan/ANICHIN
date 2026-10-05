@@ -36,9 +36,20 @@ Kalau Anda memakai deployment sendiri, **wajib** mengeset minimal:
    (tab **Security → Report a vulnerability**). Laporan hanya terlihat oleh
    maintainer dan bisa didiskusikan, diperbaiki, serta diterbitkan sebagai
    GitHub Security Advisory (CVE bila perlu).
-2. Kalau panel tersebut tidak tersedia, hubungi maintainer lewat DM/kanal
-   pribadi di profil GitHub [@njutawan](https://github.com/njutawan) — jangan
-   tempel detail eksploitasi di issue publik.
+2. **Kalau panel di atas belum aktif** (tombol **Report a vulnerability** tidak
+   muncul — fitur ini harus dinyalakan dulu di repo, lihat catatan maintainer di
+   bawah): hubungi maintainer lewat DM/kanal pribadi di profil GitHub
+   [@njutawan](https://github.com/njutawan). Sertakan `SECURITY` di awal pesan
+   dan **jangan** tempel detail eksploitasi di issue publik, diskusi, atau PR.
+
+> **Catatan untuk maintainer:** private vulnerability reporting harus
+> diaktifkan manual per repositori — **Settings → Code security → Private
+> vulnerability reporting → Enable**
+> (<https://docs.github.com/en/code-security/security-advisories/working-with-repository-security-advisories/configuring-private-vulnerability-reporting-for-a-repository>).
+> Selama belum aktif, kanal (1) tidak bisa dipakai dan pelapor akan jatuh ke
+> kanal (2). Template issue di `.github/ISSUE_TEMPLATE/` sudah mengarahkan
+> pelapor ke halaman advisory ini supaya kerentanan tidak dibuka sebagai issue
+> publik.
 
 Sertakan hal-hal berikut agar bisa langsung kami reproduksi:
 
@@ -115,7 +126,7 @@ Aktivitas di atas **tidak** memberi izin untuk menguji instance produksi
 Supaya laporan tidak tumpang tindih dengan hal yang sudah disengaja, ringkasan
 kontrol yang sudah terpasang ada di tabel **"Yang sudah bagus"** pada
 [`docs/CODE-REVIEW.md`](./docs/CODE-REVIEW.md) — antara lain: CSP berbasis nonce,
-9 security header di `src/proxy.ts`, 2FA TOTP + backup code terenkripsi
+11 security header di `src/proxy.ts`, 2FA TOTP + backup code terenkripsi
 AES-256-GCM, rate limiting 3 tingkat + lockout login, audit log ber-`IP_HASH_SALT`,
 `bun audit --production` yang memblokir CI, serta validasi input terpusat (Zod).
 

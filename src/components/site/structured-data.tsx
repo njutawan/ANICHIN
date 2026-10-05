@@ -1,8 +1,30 @@
 import { headers } from 'next/headers';
 import { db } from '@/lib/db';
+import { logger } from '@/lib/logger';
 import { sanitizeForJSONLD } from '@/lib/security';
 
-import { SITE_URL } from '@/lib/site';
+import { SITE_URL, animeUrl } from '@/lib/site';
+
+interface TrendingAnime {
+  slug: string;
+  title: string;
+  titleJp: string | null;
+  titleEn: string | null;
+  poster: string;
+  score: number;
+  views: number;
+  type: string;
+  status: string;
+  synopsis: string;
+}
+
+interface AnimeReview {
+  animeSlug: string;
+  rating: number;
+  comment: string;
+  createdAt: Date;
+  user: { name: string | null };
+}
 
 /**
  * Server component that injects JSON-LD structured data into the page.
@@ -10,55 +32,72 @@ import { SITE_URL } from '@/lib/site';
  * - ItemList of top trending anime
  * - BreadcrumbList for site navigation
  * - FAQPage with common questions
+ *
+ * Ketahanan (follow-up P1-4): seluruh pengambilan data dibungkus try/catch.
+ * Kalau database tidak tersedia, komponen tetap mengirim JSON-LD statis
+ * (breadcrumb + FAQ) alih-alih melempar error dan membuat seluruh beranda
+ * jatuh ke error boundary (HTML hanya berisi skip-link).
  */
 export async function StructuredData() {
   // Nonce CSP (lihat src/proxy.ts). Tanpa nonce, CSP produksi memakai
   // 'strict-dynamic' → script JSON-LD inline diblokir browser.
   const nonce = (await headers()).get('x-nonce') ?? undefined;
-  // Fetch top 10 trending anime with REAL review counts from DB
-  const trending = await db.anime.findMany({
-    where: { trending: true },
-    orderBy: { views: 'desc' },
-    take: 10,
-    select: {
-      slug: true,
-      title: true,
-      titleJp: true,
-      titleEn: true,
-      poster: true,
-      score: true,
-      views: true,
-      type: true,
-      status: true,
-      synopsis: true,
-    },
-  });
 
-  // Fetch real review counts per anime (Anime model doesn't have _count.reviews)
-  const topAnimeSlugs = trending.map(a => a.slug);
-  const reviewCounts = await db.serverReview.groupBy({
-    by: ['animeSlug'],
-    where: { animeSlug: { in: topAnimeSlugs } },
-    _count: { _all: true },
-  });
-  const reviewCountMap = new Map(reviewCounts.map(r => [r.animeSlug, r._count._all]));
+  let trending: TrendingAnime[] = [];
+  let reviewCountMap = new Map<string, number>();
+  let reviewsByAnime: Record<string, AnimeReview[]> = {};
 
-  // Fetch top reviews per trending anime (for individual Review JSON-LD)
-  const reviewsData = await db.serverReview.findMany({
-    where: { animeSlug: { in: topAnimeSlugs } },
-    orderBy: { createdAt: 'desc' },
-    take: 30,
-    include: {
-      user: { select: { name: true } },
-    },
-  });
+  try {
+    // Fetch top 10 trending anime with REAL review counts from DB
+    trending = await db.anime.findMany({
+      where: { trending: true },
+      orderBy: { views: 'desc' },
+      take: 10,
+      select: {
+        slug: true,
+        title: true,
+        titleJp: true,
+        titleEn: true,
+        poster: true,
+        score: true,
+        views: true,
+        type: true,
+        status: true,
+        synopsis: true,
+      },
+    });
 
-  // Group reviews by anime slug
-  const reviewsByAnime = reviewsData.reduce((acc, r) => {
-    if (!acc[r.animeSlug]) acc[r.animeSlug] = [];
-    acc[r.animeSlug].push(r);
-    return acc;
-  }, {} as Record<string, typeof reviewsData>);
+    // Fetch real review counts per anime (Anime model doesn't have _count.reviews)
+    const topAnimeSlugs = trending.map((a) => a.slug);
+    const reviewCounts = await db.serverReview.groupBy({
+      by: ['animeSlug'],
+      where: { animeSlug: { in: topAnimeSlugs } },
+      _count: { _all: true },
+    });
+    reviewCountMap = new Map(reviewCounts.map((r) => [r.animeSlug, r._count._all]));
+
+    // Fetch top reviews per trending anime (for individual Review JSON-LD)
+    const reviewsData = await db.serverReview.findMany({
+      where: { animeSlug: { in: topAnimeSlugs } },
+      orderBy: { createdAt: 'desc' },
+      take: 30,
+      include: {
+        user: { select: { name: true } },
+      },
+    });
+
+    // Group reviews by anime slug
+    reviewsByAnime = reviewsData.reduce((acc, r) => {
+      if (!acc[r.animeSlug]) acc[r.animeSlug] = [];
+      acc[r.animeSlug].push(r);
+      return acc;
+    }, {} as Record<string, AnimeReview[]>);
+  } catch (err) {
+    logger.error('StructuredData: data DB tidak tersedia — memakai JSON-LD statis', {
+      error: err instanceof Error ? err.message : 'unknown',
+      module: 'components/site/structured-data',
+    });
+  }
 
   const itemList = {
     "@context": "https://schema.org",
@@ -91,7 +130,10 @@ export async function StructuredData() {
           "@type": ["TVSeries", "CreativeWork"],
           "name": anime.title,
           "alternateName": [anime.titleEn || null, anime.titleJp].filter(Boolean),
-          "url": `${SITE_URL}/?anime=${anime.slug}`,
+          // URL kanonik halaman anime (P0-5). Sebelumnya menunjuk ke
+          // `/?anime=<slug>` — URL query yang canonical-nya adalah beranda,
+          // jadi Google membuang sinyalnya.
+          "url": animeUrl(anime.slug),
           "image": anime.poster,
           "description": anime.synopsis,
           "aggregateRating": {
