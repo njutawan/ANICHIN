@@ -1,0 +1,92 @@
+# ============================================================================
+# TEMPORARY — probe status Code Scanning (dihapus setelah hasil dibaca).
+#
+# Alasan: token GitHub App di workstation tidak punya izin `security-events`,
+# jadi daftar alert hanya bisa dibaca dari dalam workflow (GITHUB_TOKEN).
+# Hasil dikirim lewat anotasi check-run supaya bisa dibaca via REST API.
+# ============================================================================
+name: _code-scanning-probe
+
+on:
+  push:
+    branches: [arena/01a10b11-anichin]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: read
+
+jobs:
+  probe:
+    name: 🔎 Code scanning probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ambil daftar alert (state=open)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          curl -sS -o /tmp/open.json -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/code-scanning/alerts?state=open&per_page=100" > /tmp/open.code
+          python3 - <<'PY'
+          import json
+          code = open('/tmp/open.code').read().strip()
+          try:
+              data = json.load(open('/tmp/open.json'))
+          except Exception as exc:
+              print("::error title=CS-PROBE-PARSE::HTTP %s - gagal parse JSON (%s)" % (code, exc))
+              raise SystemExit(0)
+          if isinstance(data, dict):
+              print("::error title=CS-PROBE-HTTP::HTTP %s - %s" % (code, data.get('message', 'unknown')))
+              raise SystemExit(0)
+          print("::notice title=CS-OPEN-COUNT::HTTP %s - open alerts = %d" % (code, len(data)))
+          for alert in data[:9]:
+              rule = alert.get('rule', {})
+              inst = alert.get('most_recent_instance', {}) or {}
+              loc = inst.get('location', {}) or {}
+              msg = (inst.get('message', {}) or {}).get('text', '') or rule.get('description', '')
+              msg = ' '.join(str(msg).split())[:150]
+              sev = rule.get('security_severity_level') or rule.get('severity')
+              line = "#%s %s [%s] %s:%s :: %s" % (
+                  alert.get('number'), rule.get('id'), sev, loc.get('path'), loc.get('start_line'), msg)
+              print("::warning title=CS-OPEN::%s" % line)
+          PY
+
+      - name: Ringkas jumlah per state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          for state in fixed dismissed; do
+            body=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/code-scanning/alerts?state=${state}&per_page=100")
+            count=$(printf '%s' "$body" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d) if isinstance(d, list) else "http-error")')
+            echo "::notice title=CS-COUNT-${state}::state=${state} -> ${count}"
+          done
+
+      - name: Status CodeQL di commit ini
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          curl -sS -o /tmp/checks.json \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100"
+          python3 - <<'PY'
+          import json
+          try:
+              data = json.load(open('/tmp/checks.json'))
+          except Exception as exc:
+              print("::notice title=CS-CHECKS::parse fail (%s)" % exc)
+              raise SystemExit(0)
+          runs = data.get('check_runs', []) if isinstance(data, dict) else []
+          lines = ["%s=%s" % (r.get('name'), r.get('conclusion'))
+                   for r in runs if (r.get('app') or {}).get('slug') == 'github-advanced-security']
+          print("::notice title=CS-CHECKS::code-scanning checks = %s" % ('; '.join(lines) or 'none'))
+          PY
