@@ -64,6 +64,25 @@ function truncateInput(input: string, maxLength: number = 500): string {
 }
 
 /**
+ * Terapkan `pattern` berulang sampai hasilnya tidak berubah lagi (fixed point).
+ *
+ * Alasan: satu kali `replace()` dengan pola multi-karakter tidak aman — sisa
+ * string bisa membentuk ulang pola yang sedang dibuang. Contoh pada pola
+ * `/<[^>]*>/g`: `"<<scr<script>ipt>"` masih menyisakan `<script>` setelah satu
+ * pass. Ini temuan CodeQL `js/incomplete-multi-character-sanitization`
+ * (alert #1 & #6), yang remediasinya resmi adalah mengulang sampai stabil.
+ */
+function replaceUntilStable(input: string, pattern: RegExp): string {
+  let current = input;
+  let previous: string;
+  do {
+    previous = current;
+    current = current.replace(pattern, '');
+  } while (current !== previous);
+  return current;
+}
+
+/**
  * Sanitize free-form user text (komentar, ulasan) untuk disimpan di database.
  *
  * - membuang null byte & karakter kontrol (bisa merusak log/JSON/terminal),
@@ -76,11 +95,13 @@ function truncateInput(input: string, maxLength: number = 500): string {
  */
 export function sanitizeUserText(input: string, maxLength: number): string {
   if (!input) return '';
-  const cleaned = input
-    .replace(/\u0000/g, '')
-    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
-    .replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
-    .replace(/<[^>]*>/g, '');
+  const cleaned = replaceUntilStable(
+    input
+      .replace(/\u0000/g, '')
+      .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+      .replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ''),
+    /<[^>]*>/g
+  );
   return truncateInput(cleaned.trim(), maxLength);
 }
 
@@ -90,11 +111,11 @@ export function sanitizeUserText(input: string, maxLength: number): string {
  */
 function stripHtml(input: string): string {
   if (!input) return '';
-  // Remove HTML tags
-  return input
-    .replace(/<[^>]*>/g, '')
-    .replace(/&lt;[^&]*&gt;/g, '') // Double-encoded tags
-    .trim();
+  // Remove HTML tags — berulang sampai stabil supaya tag tidak bisa
+  // "terbentuk kembali" dari sisa string (mis. `<<script>script>`).
+  const withoutTags = replaceUntilStable(input, /<[^>]*>/g);
+  // Double-encoded tags (mis. `&lt;script&gt;`) — idem, harus stabil.
+  return replaceUntilStable(withoutTags, /&lt;[^&]*&gt;/g).trim();
 }
 
 /**

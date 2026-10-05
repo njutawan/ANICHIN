@@ -32,6 +32,21 @@ type CheckResult = {
 
 const checks: CheckResult[] = [];
 
+/**
+ * Validasi format client ID Google tanpa substring check.
+ *
+ * Format resmi: `<project-number>-<hash>.apps.googleusercontent.com`. Memakai
+ * `.includes('.apps.googleusercontent.com')` membuat nilai seperti
+ * `evil.example/apps.googleusercontent.com` ikut lolos — temuan CodeQL
+ * `js/incomplete-url-substring-sanitization` (alert #2). Domain di sini
+ * dibandingkan persis (equality), bukan sebagai substring.
+ */
+function isGoogleClientId(value: string): boolean {
+  const parts = value.split('.');
+  if (parts.length !== 4 || !parts[0]) return false;
+  return /^[0-9]{6,}-[a-z0-9_-]+$/i.test(parts[0]) && parts.slice(1).join('.') === 'apps.googleusercontent.com';
+}
+
 function check(name: string, condition: boolean, detail: string, warnOnFalse = false) {
   checks.push({
     name,
@@ -93,7 +108,7 @@ async function main() {
   );
   check(
     'GOOGLE_CLIENT_ID has valid format',
-    googleId.includes('.apps.googleusercontent.com'),
+    isGoogleClientId(googleId),
     'Should end with .apps.googleusercontent.com'
   );
   check(

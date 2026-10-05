@@ -77,9 +77,17 @@ async function main() {
 
   console.log('\n⚙️ 4/6 Menulis .env...');
   const envPath = path.join(process.cwd(), '.env');
-  if (!fs.existsSync(envPath)) {
-    fs.copyFileSync(path.join(process.cwd(), '.env.example'), envPath);
+  const envExamplePath = path.join(process.cwd(), '.env.example');
+  // Buat .env dari contoh secara ATOMIK: COPYFILE_EXCL gagal dengan EEXIST
+  // kalau file sudah ada. Pola check-then-act (`existsSync` lalu `copyFileSync`)
+  // punya celah TOCTOU — temuan CodeQL `js/file-system-race` (alert #7).
+  try {
+    fs.copyFileSync(envExamplePath, envPath, fs.constants.COPYFILE_EXCL);
     console.log('  ℹ .env dibuat dari .env.example — lengkapi NEXTAUTH_SECRET dulu!');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+      throw err;
+    }
   }
   const envContent = fs.readFileSync(envPath, 'utf-8');
   const updated = /^DATABASE_URL=.*$/m.test(envContent)

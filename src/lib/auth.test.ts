@@ -6,7 +6,7 @@
  * NOT tested here because it requires DB + cookie middleware.
  */
 import { describe, it, expect } from 'vitest';
-import { isValidEmail } from '@/lib/auth';
+import { isGoogleClientId, isValidEmail } from '@/lib/auth';
 
 describe('isValidEmail', () => {
   it('accepts valid emails', () => {
@@ -52,5 +52,28 @@ describe('isValidEmail', () => {
     const email = local + '@b.co';
     expect(email.length).toBe(249 + 1 + 4); // 254
     expect(isValidEmail(email)).toBe(true);
+  });
+});
+
+describe('isGoogleClientId (alert CodeQL js/incomplete-url-substring-sanitization)', () => {
+  it('menerima client ID Google yang valid', () => {
+    expect(isGoogleClientId('123456789012-abcdefghijklmnop.apps.googleusercontent.com')).toBe(true);
+    expect(isGoogleClientId('123456-abc_DEF123.apps.googleusercontent.com')).toBe(true);
+  });
+
+  it('menolak nilai yang hanya memuat domain sebagai substring', () => {
+    // Dulu lolos karena memakai `.includes('.apps.googleusercontent.com')`.
+    expect(isGoogleClientId('evil.example/apps.googleusercontent.com')).toBe(false);
+    expect(isGoogleClientId('apps.googleusercontent.com.evil.example')).toBe(false);
+    expect(isGoogleClientId('foo.apps.googleusercontent.com')).toBe(false);
+    expect(isGoogleClientId('user@apps.googleusercontent.com')).toBe(false);
+  });
+
+  it('menolak nilai kosong / cacat', () => {
+    expect(isGoogleClientId('')).toBe(false);
+    expect(isGoogleClientId('apps.googleusercontent.com')).toBe(false);
+    expect(isGoogleClientId('123456789012.apps.googleusercontent.com')).toBe(false);
+    // Prefix nomor proyek harus angka; `1-abc` tidak lolos pola format.
+    expect(isGoogleClientId('1-abc.apps.googleusercontent.com')).toBe(false);
   });
 });

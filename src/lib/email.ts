@@ -195,7 +195,9 @@ export async function sendVerificationEmail(
       });
 
       if (process.env.NODE_ENV !== 'production') {
-        console.log(`[email] SMTP sent to ${to}: ${info.messageId}`);
+        // Buang baris baru dari input pengguna sebelum masuk log (CWE-117);
+        // pola `.replace(/[\r\n]/g, "")` inilah yang dikenali CodeQL.
+        console.log(`[email] SMTP sent to ${to.replace(/[\r\n]/g, '')}: ${info.messageId}`);
       }
 
       return { delivered: true, provider: 'smtp' };
@@ -227,7 +229,7 @@ export async function sendVerificationEmail(
   // No SMTP configured — log to console (dev only; in prod, just silently fail)
   if (process.env.NODE_ENV !== 'production') {
     console.log('─────────────────────────────────────────────────────────');
-    console.log(`[email] Verification email for: ${to}`);
+    console.log(`[email] Verification email for: ${to.replace(/[\r\n]/g, '')}`);
     console.log(`[email] Verification URL:        ${verificationUrl}`);
     console.log('─────────────────────────────────────────────────────────');
   } else {
