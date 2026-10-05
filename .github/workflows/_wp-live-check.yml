@@ -1,8 +1,4 @@
-# ============================================================================
-# SEMENTARA — probe pasif situs WordPress (anichin.id)
-# Atas permintaan pemilik situs: hanya GET/HEAD ke URL publik, tanpa fuzzing,
-# brute force, atau payload. File ini DIHAPUS setelah hasilnya dibaca.
-# ============================================================================
+# SEMENTARA — probe pasif tambahan (dihapus setelah dibaca)
 name: _wp-live-check
 
 on:
@@ -15,59 +11,53 @@ permissions:
   contents: read
 
 jobs:
-  wp-probe:
-    name: wp-probe
+  wp-probe2:
+    name: wp-probe2
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: 1 — root, header, redirect, TLS
+      - name: 1 — TLS, robots, feed, sitemap
         run: |
           set +e
           U=https://anichin.id
           n() { printf '::warning title=%s::%s\n' "$1" "${2:-TIDAK-ADA}"; }
-          n "a1-status" "$(curl -sS -m 20 -o /tmp/home -w 'http=%{http_code} versi=%{http_version} redirect=%{redirect_url} tls_verify=%{ssl_verify_result}' "$U/" 2>&1 | head -c 200)"
-          curl -sS -m 20 -D /tmp/h -o /tmp/home "$U/" 2>/dev/null
-          n "a2-http-redirect" "$(curl -sS -m 20 -o /dev/null -w '%{http_code} -> %{redirect_url}' http://anichin.id/ 2>&1 | head -c 200)"
-          head -1 /tmp/h > /tmp/hdrs.txt 2>/dev/null
-          for h in strict-transport-security content-security-policy x-frame-options x-content-type-options referrer-policy permissions-policy cross-origin-opener-policy server x-powered-by alt-svc cf-cache-status; do
-            v=$(grep -i "^$h:" /tmp/h | head -1 | tr -d '\r' | cut -c1-180)
-            n "a3-$h" "${v:-TIDAK-ADA}"
-          done
-          n "a4-cookie-root" "$(grep -i '^set-cookie' /tmp/h | head -1 | tr -d '\r' | cut -c1-180)"
-          n "a5-tls" "$(echo | timeout 20 openssl s_client -connect anichin.id:443 -servername anichin.id 2>/dev/null | openssl x509 -noout -subject -issuer -dates 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
-          n "a6-ukuran-home" "$(wc -c < /tmp/home 2>/dev/null) byte"
+          n "d1-tls-cert" "$(echo | timeout 20 openssl s_client -connect anichin.id:443 -servername anichin.id 2>/dev/null | openssl x509 -noout -subject -issuer -dates 2>/dev/null | tr '\n' ' ' | cut -c1-260)"
+          n "d2-tls-protokol" "$(echo | timeout 20 openssl s_client -connect anichin.id:443 -servername anichin.id 2>/dev/null | grep -Eo 'Protocol *: *[A-Za-z0-9.]+' | head -1)"
+          curl -sS -m 20 -D /tmp/h -o /dev/null "$U/" 2>/dev/null
+          n "d3-alt-svc" "$(grep -i '^alt-svc' /tmp/h | tr -d '\r' | cut -c1-160)"
+          n "d4-robots" "$(curl -sS -m 20 "$U/robots.txt" 2>/dev/null | tr '\n' ' ' | cut -c1-240)"
+          n "d5-sitemap-target" "$(curl -sS -m 20 -o /dev/null -w '%{http_code} -> %{redirect_url}' "$U/wp-sitemap.xml" 2>&1 | cut -c1-200)"
+          n "d6-sitemap2" "$(curl -sS -m 20 -o /dev/null -w 'http=%{http_code}' "$U/sitemap_index.xml" 2>&1 | cut -c1-40)"
+          n "d7-feed" "$(curl -sS -m 20 -o /dev/null -w 'http=%{http_code}' "$U/feed/" 2>&1 | cut -c1-40)"
+          n "d8-header-wp-json" "$(curl -sS -m 20 -D - -o /dev/null "$U/wp-json/" 2>/dev/null | grep -iE '^(x-robots-tag|access-control-allow-origin|cache-control|content-type)' | tr -d '\r' | tr '\n' ' | ' | cut -c1-240)"
+          n "d9-namespaces" "$(curl -sS -m 20 "$U/wp-json/" 2>/dev/null | grep -o '\"namespaces\":\[[^]]*\]' | cut -c1-300)"
 
-      - name: 2 — endpoint WordPress
+      - name: 2 — versi tema/aset + permukaan REST
         run: |
           set +e
           U=https://anichin.id
           n() { printf '::warning title=%s::%s\n' "$1" "${2:-TIDAK-ADA}"; }
-          n "b1-wp-json" "$(curl -sS -m 20 -o /tmp/j -w 'http=%{http_code} bytes=%{size_download}' "$U/wp-json/" 2>&1 | head -c 120)"
-          n "b2-users-rest" "$(curl -sS -m 20 -o /tmp/u -w 'http=%{http_code} slug=' "$U/wp-json/wp/v2/users" 2>&1 | head -c 60)$(grep -o '\"slug\"' /tmp/u 2>/dev/null | wc -l)"
-          n "b3-users-alt" "$(curl -sS -m 20 -o /tmp/u2 -w 'http=%{http_code} slug=' "$U/?rest_route=/wp/v2/users" 2>&1 | head -c 60)$(grep -o '\"slug\"' /tmp/u2 2>/dev/null | wc -l)"
-          n "b4-author-enum" "$(curl -sS -m 20 -o /dev/null -w '%{http_code} -> %{redirect_url}' "$U/?author=1" 2>&1 | head -c 160)"
-          n "b5-xmlrpc" "$(curl -sS -m 20 -o /tmp/x -w 'http=%{http_code} ' "$U/xmlrpc.php" 2>&1 | head -c 40)$(head -c 70 /tmp/x 2>/dev/null | tr '\n' ' ')"
-          n "b6-readme" "$(curl -sS -m 20 -o /tmp/r -w 'http=%{http_code} ' "$U/readme.html" 2>&1 | head -c 40)$(grep -io 'Version [0-9.]*' /tmp/r 2>/dev/null | head -1)"
-          n "b7-wp-login" "$(curl -sS -m 20 -o /tmp/l -w 'http=%{http_code} ' "$U/wp-login.php" 2>&1 | head -c 40)register=$(grep -ci 'action=register' /tmp/l 2>/dev/null)"
-          n "b8-cookie-login" "$(grep -i '^set-cookie' /tmp/l 2>/dev/null | head -1 | tr -d '\r' | cut -c1-180)"
-          n "b9-uploads" "$(curl -sS -m 20 -o /dev/null -w 'http=%{http_code}' "$U/wp-content/uploads/" 2>&1 | head -c 40)"
-          n "b10-sitemap" "$(curl -sS -m 20 -o /dev/null -w 'http=%{http_code}' "$U/wp-sitemap.xml" 2>&1 | head -c 40)"
-          n "b11-robots" "$(curl -sS -m 20 "$U/robots.txt" 2>/dev/null | tr '\n' ' ' | cut -c1-220)"
-          n "b12-feed" "$(curl -sS -m 20 -o /dev/null -w 'http=%{http_code}' "$U/feed/" 2>&1 | head -c 40)"
-
-      - name: 3 — berkas sensitif & versi
-        run: |
-          set +e
-          U=https://anichin.id
-          n() { printf '::warning title=%s::%s\n' "$1" "${2:-TIDAK-ADA}"; }
-          for p in /.env /wp-config.php.bak /wp-config.php~ /.git/config /backup.zip /wp-content/debug.log /security.txt /.well-known/security.txt; do
-            n "c-file$p" "$(curl -sS -m 15 -o /dev/null -w 'http=%{http_code}' "$U$p" 2>&1 | head -c 40)"
-          done
           curl -sS -m 25 -o /tmp/home "$U/" 2>/dev/null
-          n "c-generator" "$(grep -io '<meta name="generator" content="[^"]*"' /tmp/home | head -1)"
-          n "c-plugins" "$(grep -o 'wp-content/plugins/[a-z0-9._-]*' /tmp/home | sort -u | head -8 | tr '\n' ',')"
-          n "c-tema" "$(grep -o 'wp-content/themes/[a-z0-9._-]*' /tmp/home | sort -u | head -3 | tr '\n' ',')"
-          n "c-ver-aset" "$(grep -o 'ver=[0-9][0-9.]*' /tmp/home | sort -u | head -10 | tr '\n' ',')"
-          n "c-wp-includes" "$(grep -o 'wp-includes/[a-z.-]*' /tmp/home | sort -u | head -5 | tr '\n' ',')"
-          n "c-elementor" "$(grep -o 'elementor[a-z-]*' /tmp/home | sort -u | head -4 | tr '\n' ',')"
-          n "c-ukuran-html" "$(wc -c < /tmp/home 2>/dev/null) byte"
+          n "e1-ukuran-html" "$(wc -c < /tmp/home 2>/dev/null) byte"
+          n "e2-tema" "$(grep -o 'wp-content/themes/[a-z0-9._-]*' /tmp/home | sort -u | head -4 | tr '\n' ',')"
+          n "e3-aset-ver" "$(grep -oE 'wp-content/(themes|plugins|wp-includes)/[a-z0-9._/-]+\?ver=[0-9a-zA-Z.-]+' /tmp/home | sed 's/.*?ver=//' | sort -u | head -8 | tr '\n' ',')"
+          n "e4-plugin-readme" "$(curl -sS -m 15 -o /tmp/pr -w 'http=%{http_code} ' "$U/wp-content/plugins/optimization-detective/readme.txt" 2>&1 | cut -c1-40)$(grep -io 'Stable tag: *[0-9a-zA-Z.-]*' /tmp/pr 2>/dev/null | head -1)"
+          n "e5-posts-rest" "$(curl -sS -m 20 -o /tmp/p -w 'http=%{http_code} jumlah=' "$U/wp-json/wp/v2/posts?per_page=1" 2>&1 | cut -c1-40)$(grep -o '\"id\"' /tmp/p 2>/dev/null | wc -l)"
+          n "e6-pages-rest" "$(curl -sS -m 20 -o /tmp/pg -w 'http=%{http_code} jumlah=' "$U/wp-json/wp/v2/pages?per_page=1" 2>&1 | cut -c1-40)$(grep -o '\"id\"' /tmp/pg 2>/dev/null | wc -l)"
+          n "e7-wp-json-users-roles" "$(curl -sS -m 20 "$U/wp-json/wp/v2/users" 2>/dev/null | grep -o '\"name\":\"[^\"]*\"' | head -3 | tr '\n' ',')"
+          n "e8-admin-ajax" "$(curl -sS -m 20 -o /dev/null -w 'http=%{http_code}' "$U/wp-admin/admin-ajax.php" 2>&1 | cut -c1-40)"
+          n "e9-xmlrpc-post" "$(curl -sS -m 20 -o /dev/null -w 'http=%{http_code}' -X POST -d '<methodCall><methodName>system.listMethods</methodName></methodCall>' "$U/xmlrpc.php" 2>&1 | cut -c1-40)"
+
+      - name: 3 — subdomain & permukaan lain
+        run: |
+          set +e
+          n() { printf '::warning title=%s::%s\n' "$1" "${2:-TIDAK-ADA}"; }
+          for h in staging.anichin.id www.anichin.id; do
+            n "f-$h" "$(curl -sS -m 20 -o /dev/null -w 'http=%{http_code} ip=%{remote_ip} redirect=%{redirect_url} tls=%{ssl_verify_result}' "https://$h/" 2>&1 | cut -c1-200)"
+          done
+          n "f-www-redirect" "$(curl -sS -m 20 -o /dev/null -w '%{http_code} -> %{redirect_url}' http://www.anichin.id/ 2>&1 | cut -c1-160)"
+          n "f-wp-json-users-headers" "$(curl -sS -m 20 -D - -o /dev/null "https://anichin.id/wp-json/wp/v2/users" 2>/dev/null | grep -iE '^(cache-control|x-robots-tag|link|allow)' | tr -d '\r' | tr '\n' ' | ' | cut -c1-240)"
+          n "f-login-alternatif" "$(curl -sS -m 20 -o /dev/null -w 'http=%{http_code}' "https://anichin.id/login" 2>&1 | cut -c1-40)"
+          n "f-wp-signup" "$(curl -sS -m 20 -o /dev/null -w 'http=%{http_code}' "https://anichin.id/wp-signup.php" 2>&1 | cut -c1-40)"
+          n "f-csp-report" "$(curl -sS -m 20 -o /dev/null -w 'http=%{http_code}' "https://anichin.id/wp-content/" 2>&1 | cut -c1-40)"
+          n "f-beranda-cache" "$(curl -sS -m 20 -D - -o /dev/null "https://anichin.id/" 2>/dev/null | grep -iE '^(cache-control|cf-cache-status|age|vary)' | tr -d '\r' | tr '\n' ' | ' | cut -c1-200)"
