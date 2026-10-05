@@ -1,4 +1,8 @@
-# SEMENTARA — diagnostik format anotasi (dihapus setelah dibaca)
+# ============================================================================
+# SEMENTARA — probe pasif situs WordPress (anichin.id)
+# Atas permintaan pemilik situs: hanya GET/HEAD ke URL publik, tanpa fuzzing,
+# brute force, atau payload. File ini DIHAPUS setelah hasilnya dibaca.
+# ============================================================================
 name: _wp-live-check
 
 on:
@@ -11,41 +15,59 @@ permissions:
   contents: read
 
 jobs:
-  diag:
-    name: diag
+  wp-probe:
+    name: wp-probe
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - name: d1 plain
+      - name: 1 — root, header, redirect, TLS
         run: |
-          echo "::warning title=d1::hello world"
-      - name: d2 tanpa title
+          set +e
+          U=https://anichin.id
+          n() { printf '::warning title=%s::%s\n' "$1" "${2:-TIDAK-ADA}"; }
+          n "a1-status" "$(curl -sS -m 20 -o /tmp/home -w 'http=%{http_code} versi=%{http_version} redirect=%{redirect_url} tls_verify=%{ssl_verify_result}' "$U/" 2>&1 | head -c 200)"
+          curl -sS -m 20 -D /tmp/h -o /tmp/home "$U/" 2>/dev/null
+          n "a2-http-redirect" "$(curl -sS -m 20 -o /dev/null -w '%{http_code} -> %{redirect_url}' http://anichin.id/ 2>&1 | head -c 200)"
+          head -1 /tmp/h > /tmp/hdrs.txt 2>/dev/null
+          for h in strict-transport-security content-security-policy x-frame-options x-content-type-options referrer-policy permissions-policy cross-origin-opener-policy server x-powered-by alt-svc cf-cache-status; do
+            v=$(grep -i "^$h:" /tmp/h | head -1 | tr -d '\r' | cut -c1-180)
+            n "a3-$h" "${v:-TIDAK-ADA}"
+          done
+          n "a4-cookie-root" "$(grep -i '^set-cookie' /tmp/h | head -1 | tr -d '\r' | cut -c1-180)"
+          n "a5-tls" "$(echo | timeout 20 openssl s_client -connect anichin.id:443 -servername anichin.id 2>/dev/null | openssl x509 -noout -subject -issuer -dates 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
+          n "a6-ukuran-home" "$(wc -c < /tmp/home 2>/dev/null) byte"
+
+      - name: 2 — endpoint WordPress
         run: |
-          echo "::warning::pesan tanpa title"
-      - name: d3 pipe dan tanda
+          set +e
+          U=https://anichin.id
+          n() { printf '::warning title=%s::%s\n' "$1" "${2:-TIDAK-ADA}"; }
+          n "b1-wp-json" "$(curl -sS -m 20 -o /tmp/j -w 'http=%{http_code} bytes=%{size_download}' "$U/wp-json/" 2>&1 | head -c 120)"
+          n "b2-users-rest" "$(curl -sS -m 20 -o /tmp/u -w 'http=%{http_code} slug=' "$U/wp-json/wp/v2/users" 2>&1 | head -c 60)$(grep -o '\"slug\"' /tmp/u 2>/dev/null | wc -l)"
+          n "b3-users-alt" "$(curl -sS -m 20 -o /tmp/u2 -w 'http=%{http_code} slug=' "$U/?rest_route=/wp/v2/users" 2>&1 | head -c 60)$(grep -o '\"slug\"' /tmp/u2 2>/dev/null | wc -l)"
+          n "b4-author-enum" "$(curl -sS -m 20 -o /dev/null -w '%{http_code} -> %{redirect_url}' "$U/?author=1" 2>&1 | head -c 160)"
+          n "b5-xmlrpc" "$(curl -sS -m 20 -o /tmp/x -w 'http=%{http_code} ' "$U/xmlrpc.php" 2>&1 | head -c 40)$(head -c 70 /tmp/x 2>/dev/null | tr '\n' ' ')"
+          n "b6-readme" "$(curl -sS -m 20 -o /tmp/r -w 'http=%{http_code} ' "$U/readme.html" 2>&1 | head -c 40)$(grep -io 'Version [0-9.]*' /tmp/r 2>/dev/null | head -1)"
+          n "b7-wp-login" "$(curl -sS -m 20 -o /tmp/l -w 'http=%{http_code} ' "$U/wp-login.php" 2>&1 | head -c 40)register=$(grep -ci 'action=register' /tmp/l 2>/dev/null)"
+          n "b8-cookie-login" "$(grep -i '^set-cookie' /tmp/l 2>/dev/null | head -1 | tr -d '\r' | cut -c1-180)"
+          n "b9-uploads" "$(curl -sS -m 20 -o /dev/null -w 'http=%{http_code}' "$U/wp-content/uploads/" 2>&1 | head -c 40)"
+          n "b10-sitemap" "$(curl -sS -m 20 -o /dev/null -w 'http=%{http_code}' "$U/wp-sitemap.xml" 2>&1 | head -c 40)"
+          n "b11-robots" "$(curl -sS -m 20 "$U/robots.txt" 2>/dev/null | tr '\n' ' ' | cut -c1-220)"
+          n "b12-feed" "$(curl -sS -m 20 -o /dev/null -w 'http=%{http_code}' "$U/feed/" 2>&1 | head -c 40)"
+
+      - name: 3 — berkas sensitif & versi
         run: |
-          echo "::warning title=d3::a | b : c <d> & e"
-      - name: d4 persen
-        run: |
-          echo "::warning title=d4::100%25 dan %2525"
-      - name: d5 multiline escaped
-        run: |
-          echo "::warning title=d5::baris1%0Abaris2%0Abaris3"
-      - name: d6 panjang
-        run: |
-          msg=$(printf 'L%s' $(seq 1 400))
-          echo "::warning title=d6::$msg"
-      - name: d7 banyak pesan satu step
-        run: |
-          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do echo "::warning title=d7-$i::pesan $i"; done
-      - name: d8 judul seperti chunk
-        run: |
-          echo "::warning title=wp 1/5 (baris 1-22 dari 108)::status: 200 http=2"
-      - name: d9 ringkasan gabungan
-        run: |
-          msg=$(printf '%s%%0A' "satu=1" "dua=2" "tiga=3")
-          echo "::warning title=d9::$msg"
-      - name: d10 error lanjut
-        continue-on-error: true
-        run: |
-          echo "::error title=d10::pesan error"
+          set +e
+          U=https://anichin.id
+          n() { printf '::warning title=%s::%s\n' "$1" "${2:-TIDAK-ADA}"; }
+          for p in /.env /wp-config.php.bak /wp-config.php~ /.git/config /backup.zip /wp-content/debug.log /security.txt /.well-known/security.txt; do
+            n "c-file$p" "$(curl -sS -m 15 -o /dev/null -w 'http=%{http_code}' "$U$p" 2>&1 | head -c 40)"
+          done
+          curl -sS -m 25 -o /tmp/home "$U/" 2>/dev/null
+          n "c-generator" "$(grep -io '<meta name="generator" content="[^"]*"' /tmp/home | head -1)"
+          n "c-plugins" "$(grep -o 'wp-content/plugins/[a-z0-9._-]*' /tmp/home | sort -u | head -8 | tr '\n' ',')"
+          n "c-tema" "$(grep -o 'wp-content/themes/[a-z0-9._-]*' /tmp/home | sort -u | head -3 | tr '\n' ',')"
+          n "c-ver-aset" "$(grep -o 'ver=[0-9][0-9.]*' /tmp/home | sort -u | head -10 | tr '\n' ',')"
+          n "c-wp-includes" "$(grep -o 'wp-includes/[a-z.-]*' /tmp/home | sort -u | head -5 | tr '\n' ',')"
+          n "c-elementor" "$(grep -o 'elementor[a-z-]*' /tmp/home | sort -u | head -4 | tr '\n' ',')"
+          n "c-ukuran-html" "$(wc -c < /tmp/home 2>/dev/null) byte"
