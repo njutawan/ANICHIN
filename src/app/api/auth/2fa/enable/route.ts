@@ -28,10 +28,29 @@ import {
  * If the pending secret has expired (5 min) or is missing, returns 410 Gone
  * (user must call /setup again).
  */
+/**
+ * Normalisasi nilai `token` dari body: hanya string yang dipakai, di-trim.
+ *
+ * Dipisah dari route supaya tidak ada cabang (if) yang bergantung pada input
+ * pengguna sebelum aksi sensitif dijalankan. Cabang semacam itu dibaca CodeQL
+ * sebagai `js/user-controlled-bypass` (alert #4): "kondisi yang dikontrol
+ * pengguna menjaga aksi sensitif". Keputusan akhir tetap dari hasil verifikasi
+ * TOTP, bukan dari bentuk input.
+ */
+function normalizeTotpInput(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 export async function POST(req: NextRequest) {
   try {
     const limited = await checkRateLimit(req, 'auth');
     if (limited) return limited;
+
+    // Autentikasi dulu, baru menyentuh input pengguna.
+    const [session, err] = await requireUser(req);
+    if (err) return err;
+
+    const userId = session!.user.id;
 
     // Body size guard
     const contentLength = Number(req.headers.get('content-length') ?? 0);
@@ -53,18 +72,7 @@ export async function POST(req: NextRequest) {
     }
 
     const { token } = (body ?? {}) as { token?: unknown };
-
-    if (typeof token !== 'string' || !token.trim()) {
-      return NextResponse.json(
-        { error: 'Kode 6-digit wajib diisi.' },
-        { status: 400 }
-      );
-    }
-
-    const [session, err] = await requireUser(req);
-    if (err) return err;
-
-    const userId = session!.user.id;
+    const candidateToken = normalizeTotpInput(token);
 
     // Bail if already enabled (idempotency guard — don't overwrite existing secret)
     const user = await db.user.findUnique({
@@ -96,12 +104,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Verify the 6-digit TOTP token
-    if (!verifyTwoFactorToken(token, pending.secret)) {
+    // Verify the 6-digit TOTP token.
+    //
+    // Kode ini SELALU dipanggil (tidak dijaga oleh cabang atas input pengguna),
+    // dan keputusan lanjut/tidak diambil dari hasil verifikasi — hasil itulah
+    // yang menjadi "guard" untuk aksi sensitif di bawah.
+    const isTotpValid = verifyTwoFactorToken(candidateToken, pending.secret);
+    if (!isTotpValid) {
       // Do NOT clear the pending secret on failure — user gets a few attempts
       // (rate-limit already throttles this endpoint at 20 req/min).
       return NextResponse.json(
-        { error: 'Kode tidak valid. Coba lagi.' },
+        { error: candidateToken ? 'Kode tidak valid. Coba lagi.' : 'Kode 6-digit wajib diisi.' },
         { status: 400 }
       );
     }

@@ -95,6 +95,21 @@ function resolveSecret(): string {
   return secret;
 }
 
+/**
+ * Validasi format client ID Google tanpa substring check.
+ *
+ * Client ID resmi berbentuk `<project-number>-<hash>.apps.googleusercontent.com`.
+ * Pengecekan `.includes('.apps.googleusercontent.com')` tidak cukup: host asing
+ * yang kebetulan memuat string itu (mis. `evil.example/apps.googleusercontent.com`)
+ * juga lolos — temuan CodeQL `js/incomplete-url-substring-sanitization` (alert #3).
+ * Di sini domain dibandingkan persis (equality), bukan sebagai substring.
+ */
+export function isGoogleClientId(value: string): boolean {
+  const parts = value.split('.');
+  if (parts.length !== 4 || !parts[0]) return false;
+  return /^[0-9]{6,}-[a-z0-9_-]+$/i.test(parts[0]) && parts.slice(1).join('.') === 'apps.googleusercontent.com';
+}
+
 // Build providers array — OAuth providers only included if env vars set
 function buildProviders() {
   // Validate production config at startup (fail fast)
@@ -103,7 +118,7 @@ function buildProviders() {
     if (!process.env.NEXTAUTH_URL?.startsWith('https://')) {
       productionWarnings.push('NEXTAUTH_URL must use HTTPS in production');
     }
-    if (process.env.GOOGLE_CLIENT_ID && !process.env.GOOGLE_CLIENT_ID.includes('.apps.googleusercontent.com')) {
+    if (process.env.GOOGLE_CLIENT_ID && !isGoogleClientId(process.env.GOOGLE_CLIENT_ID)) {
       productionWarnings.push('GOOGLE_CLIENT_ID format looks invalid (expected .apps.googleusercontent.com suffix)');
     }
     if (process.env.GOOGLE_CLIENT_SECRET && !process.env.GOOGLE_CLIENT_SECRET.startsWith('GOCSPX-')) {

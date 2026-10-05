@@ -10,6 +10,7 @@ import {
   sanitizeUrl,
   sanitizeDisplayName,
   sanitizeComment,
+  sanitizeUserText,
 } from '@/lib/security';
 
 describe('sanitizeForJSONLD', () => {
@@ -142,5 +143,23 @@ describe('sanitizeComment', () => {
     expect(sanitizeComment('Episode ini keren banget!')).toBe(
       'Episode ini keren banget!'
     );
+  });
+});
+
+describe('sanitasi multi-karakter stabil (alert CodeQL #1 & #6)', () => {
+  it('sanitizeComment tidak menyisakan tag dari input bersarang', () => {
+    // Satu pass replace() dulu menyisakan "<script>" dari input semacam ini.
+    const result = sanitizeComment('<<script>script>alert(1)<</script>/script>');
+    expect(result).not.toMatch(/<script/i);
+    expect(result).not.toContain('<');
+  });
+
+  it('sanitizeUserText juga stabil untuk tag bersarang', () => {
+    const result = sanitizeUserText('<<b>b>halo<</b>/b>', 500);
+    expect(result).not.toContain('<');
+  });
+
+  it('sanitizeUserText membuang tag sekali jalan untuk input normal', () => {
+    expect(sanitizeUserText('<b>Halo</b> <script>alert(1)</script> dunia', 500)).toBe('Halo alert(1) dunia');
   });
 });

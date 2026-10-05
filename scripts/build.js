@@ -12,13 +12,35 @@
  * Docker detection: DEPLOY_TARGET=standalone env var (set in Dockerfile)
  */
 
-const { execSync } = require('node:child_process');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { resolveCliCommand } = require('./lib/resolve-cli');
+const { resolveCliCommand, formatCliCommand } = require('./lib/resolve-cli');
 
 const isVercel = process.env.VERCEL === '1';
 const isStandalone = !isVercel && process.env.DEPLOY_TARGET === 'standalone';
+const isWindows = process.platform === 'win32';
+
+/**
+ * Jalankan `{ file, args }` TANPA shell dan kembalikan sukses/gagal.
+ *
+ * Tidak ada string perintah yang digabung lalu di-parse shell — itu sumber
+ * temuan CodeQL `js/shell-command-injection-from-environment` (alert #8 & #9)
+ * dan `js/indirect-command-line-injection` (alert #10): path absolut maupun
+ * argumen dari `process.argv` tidak boleh diterjemahkan oleh shell.
+ *
+ * Di Windows, shim `.cmd`/`.bat` tidak bisa di-spawn langsung (Node ≥20.12),
+ * jadi dijalankan lewat `cmd.exe` dengan argv terpisah — tetap tanpa
+ * menyusun string perintah.
+ */
+function runCli(invocation) {
+  const options = { stdio: 'inherit' };
+  const result =
+    isWindows && /\.(cmd|bat)$/i.test(invocation.file)
+      ? spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', invocation.file, ...invocation.args], options)
+      : spawnSync(invocation.file, invocation.args, options);
+  return !result.error && result.status === 0;
+}
 
 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 console.log('  🏗️  AniChin Build');
@@ -32,39 +54,35 @@ console.log('');
 // (hasil `npm install` / `bun install` / `pnpm install`), dengan fallback
 // bunx → npx, jadi `npm run build` tetap jalan di environment Node-only.
 console.log('▶ Step 1: Generating Prisma client...');
-const prismaCommand = resolveCliCommand('prisma', 'generate');
-if (!prismaCommand) {
+const prismaInvocation = resolveCliCommand('prisma', ['generate']);
+if (!prismaInvocation) {
   console.error('✗ Prisma CLI tidak ditemukan (node_modules/.bin/prisma, bunx, npx).');
   console.error('  Jalankan `npm install` (atau `bun install`) lebih dulu.');
   process.exit(1);
 }
-console.log(`  perintah: ${prismaCommand}`);
-try {
-  execSync(prismaCommand, { stdio: 'inherit' });
-  console.log('✓ Prisma client generated\n');
-} catch {
+console.log(`  perintah: ${formatCliCommand(prismaInvocation)}`);
+if (!runCli(prismaInvocation)) {
   console.error('✗ Prisma generate failed');
   process.exit(1);
 }
+console.log('✓ Prisma client generated\n');
 
 // Step 2: Run Next.js build
 // Argumen tambahan diteruskan ke `next build` (mis. `node scripts/build.js
 // --webpack` untuk memaksa webpack alih-alih Turbopack saat debugging).
-const nextArgs = ['build', ...process.argv.slice(2)].join(' ');
+const nextArgs = ['build', ...process.argv.slice(2)];
 console.log('▶ Step 2: Running next build...');
-const nextCommand = resolveCliCommand('next', nextArgs);
-if (!nextCommand) {
+const nextInvocation = resolveCliCommand('next', nextArgs);
+if (!nextInvocation) {
   console.error('✗ Next.js CLI tidak ditemukan (node_modules/.bin/next, bunx, npx).');
   process.exit(1);
 }
-console.log(`  perintah: ${nextCommand}`);
-try {
-  execSync(nextCommand, { stdio: 'inherit' });
-  console.log('✓ Next.js build complete\n');
-} catch {
+console.log(`  perintah: ${formatCliCommand(nextInvocation)}`);
+if (!runCli(nextInvocation)) {
   console.error('✗ Next.js build failed');
   process.exit(1);
 }
+console.log('✓ Next.js build complete\n');
 
 // Step 3: For Docker/standalone only — copy static + public into standalone
 if (isStandalone) {
