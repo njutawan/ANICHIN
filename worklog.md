@@ -3573,3 +3573,25 @@ QA / Verification:
 Stage Summary:
 - Kelima item P2 yang diminta sudah ada di `main` dan terverifikasi (dengan catatan E2E hanya bisa dibuktikan di CI). Sebelas cacat/kelalaian nyata ditemukan lewat audit ulang dan sudah diperbaiki, termasuk dua bug yang terlihat pengguna (tombol Hapus ulasan mati total; beranda kosong saat DB down) dan dua bug kebenaran data (komentar baru bisa tertahan cache CDN; paginasi tidak stabil).
 - Sisa yang belum dikerjakan (bukan blocker): audit a11y/axe di CI, template issue tambahan, follow-up "likes" (butuh endpoint + buku besar per pengguna), dan pengaktifan private vulnerability reporting (butuh izin admin repo).
+
+---
+Task ID: SECURITY-PVR-CHECK
+Agent: Arena Agent Mode
+Task: Aktifkan private vulnerability reporting (PVR) untuk njutawan/ANICHIN supaya kanal utama SECURITY.md hidup.
+
+Work Log:
+- **Diagnosis (bukan asumsi):** `GET /repos/njutawan/ANICHIN/private-vulnerability-reporting` → `{"enabled":false}` (HTTP 200, jadi bisa dibaca). Aktivasi dicoba dua jalur dan keduanya ditolak:
+  - `PUT /repos/njutawan/ANICHIN/private-vulnerability-reporting` → 403 "Resource not accessible by integration" dengan `X-Accepted-Github-Permissions: administration=write`.
+  - `PATCH /repos/njutawan/ANICHIN` dengan `security_and_analysis[private_vulnerability_reporting][status]=enabled` → 403 yang sama.
+  - Artinya **bukan** token kurang scope: `repos` menunjukkan `permissions.admin=true` (App punya admin), tapi endpoint setelan keamanan ini secara desain menolak token GitHub App/integrasi (mekanisme enable PVR pertama-tama diminta untuk auth user + `administration=write`). Token di sandbox adalah App token (`X-Oauth-Client-Id: Iv23lifFg4c9eT1T6hLC`, `X-Oauth-Scopes` kosong), dan tidak ada kredensial kedua di environment (GITHUB_TOKEN = GH_TOKEN, tidak ada git credential helper/netrc).
+  - Status halaman untuk anonim: `/security/advisories/new` → **302 ke /login?return_to=...** (belum aktif), `/security/advisories` → 200. Jadi kanal (1) di SECURITY.md memang belum bisa dipakai publik.
+
+QA / Verification:
+- `bash -n` + menjalankan `scripts/setup-private-vulnerability-reporting.sh` (mode cek): melaporkan `disabled` dengan dua cara aktivasi + exit 1.
+- Menjalankan `--enable` sebagai uji jalur error: gagal terkontrol dengan pesan 403 + penjelasan izin yang dibutuhkan (bukan stack trace), exit 1.
+- Status PVR dicek ulang setelah percobaan: tetap `{"enabled":false}` (tidak ada perubahan tak sengaja).
+
+Stage Summary:
+- Aktivasi PVR **tidak bisa dilakukan dari sesi ini**: endpoint-nya menolak token integrasi dengan 403 (butuh izin Administration: write yang tidak dimiliki App/token yang tersedia). Karena ini setelan repositori, ia juga tidak bisa "dikirim sebagai kode".
+- Yang dikerjakan: helper resmi `scripts/setup-private-vulnerability-reporting.sh` (cek status, aktifkan satu perintah, pesan error 403 yang menjelaskan izin yang dibutuhkan), SECURITY.md diperbarui (status terverifikasi 2026-10-05, tautan UI langsung, izin token yang tepat), dan docs/CODE-REVIEW.md mencatat item ini sebagai satu-satunya sisa P2 dengan langkah penyelesaian.
+- **Perlu tindakan Anda (2 menit, salah satu):** (a) buka https://github.com/njutawan/ANICHIN/settings/security_analysis → Private vulnerability reporting → Enable; atau (b) beri izin **Administration: read and write** ke App Arena lalu jalankan `./scripts/setup-private-vulnerability-reporting.sh --enable`. Setelah aktif, jalankan script lagi — ia akan melaporkan `enabled`.

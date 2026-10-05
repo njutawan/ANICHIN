@@ -42,14 +42,25 @@ Kalau Anda memakai deployment sendiri, **wajib** mengeset minimal:
    [@njutawan](https://github.com/njutawan). Sertakan `SECURITY` di awal pesan
    dan **jangan** tempel detail eksploitasi di issue publik, diskusi, atau PR.
 
-> **Catatan untuk maintainer:** private vulnerability reporting harus
-> diaktifkan manual per repositori — **Settings → Code security → Private
-> vulnerability reporting → Enable**
-> (<https://docs.github.com/en/code-security/security-advisories/working-with-repository-security-advisories/configuring-private-vulnerability-reporting-for-a-repository>).
-> Selama belum aktif, kanal (1) tidak bisa dipakai dan pelapor akan jatuh ke
-> kanal (2). Template issue di `.github/ISSUE_TEMPLATE/` sudah mengarahkan
-> pelapor ke halaman advisory ini supaya kerentanan tidak dibuka sebagai issue
-> publik.
+> **Catatan untuk maintainer:** private vulnerability reporting (PVR) adalah
+> setelan per repositori dan **belum aktif** — status per 2026-10-05 lewat
+> `gh api repos/njutawan/ANICHIN/private-vulnerability-reporting` adalah
+> `{"enabled":false}`, jadi kanal (1) belum bisa dipakai dan pelapor jatuh ke
+> kanal (2). Cara mengaktifkan:
+>
+> - **UI:** <https://github.com/njutawan/ANICHIN/settings/security_analysis> →
+>   **Private vulnerability reporting → Enable**
+>   ([dokumentasi](https://docs.github.com/en/code-security/security-advisories/working-with-repository-security-advisories/configuring-private-vulnerability-reporting-for-a-repository));
+> - **API/verifikasi:** `./scripts/setup-private-vulnerability-reporting.sh`
+>   (cek status) atau `… --enable` (aktifkan). Endpoint
+>   `PUT /repos/{owner}/{repo}/private-vulnerability-reporting` butuh token
+>   dengan **Administration: read and write** (fine-grained PAT/GitHub App)
+>   atau scope `public_repo`/`repo` (classic PAT). Token integrasi tanpa izin
+>   itu ditolak `403 "Resource not accessible by integration"` — ini penyebab
+>   403 yang sudah kami verifikasi, bukan bug pada setelannya.
+>
+> Template issue di `.github/ISSUE_TEMPLATE/` sudah mengarahkan pelapor ke
+> halaman advisory ini supaya kerentanan tidak dibuka sebagai issue publik.
 
 Sertakan hal-hal berikut agar bisa langsung kami reproduksi:
 
