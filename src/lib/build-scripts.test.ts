@@ -12,12 +12,28 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const require = createRequire(import.meta.url);
-const { localBinPath, pickCliCommand, resolveCliCommand, formatCliCommand } = require('../../scripts/lib/resolve-cli');
+const { localBinPath, localEntryPath, pickCliCommand, resolveCliCommand, formatCliCommand } = require('../../scripts/lib/resolve-cli');
 
 const repoRoot = process.cwd();
 
 describe('pickCliCommand (scripts/lib/resolve-cli)', () => {
-  it('mengutamakan binary lokal dari node_modules/.bin', () => {
+  it('mengutamakan entry point JS yang dijalankan process.execPath (tanpa shell)', () => {
+    const command = pickCliCommand({
+      name: 'prisma',
+      args: ['generate'],
+      localEntry: '/app/node_modules/prisma/build/index.js',
+      localBin: '/app/node_modules/.bin/prisma',
+      localExists: true,
+      bunx: true,
+      npx: true,
+    });
+    expect(command).toEqual({
+      file: process.execPath,
+      args: ['/app/node_modules/prisma/build/index.js', 'generate'],
+    });
+  });
+
+  it('mengutamakan binary lokal dari node_modules/.bin kalau entry point tidak ada', () => {
     const command = pickCliCommand({
       name: 'prisma',
       args: ['generate'],
@@ -72,6 +88,13 @@ describe('scripts/build.js (P1-12)', () => {
     expect(source).toMatch(/spawnSync\(/);
   });
 
+  it('tidak memakai interpreter perantara (shell: true / batch shim Windows)', () => {
+    // Jalur `cmd.exe /c <shim .cmd>` ikut terdeteksi CodeQL sebagai shell
+    // command injection, jadi diganti entry point JS + process.execPath.
+    expect(source).not.toMatch(/cmd\.exe|ComSpec/);
+    expect(source).not.toMatch(/shell\s*:\s*true/);
+  });
+
   it('memakai resolver yang punya fallback bunx → npx', () => {
     expect(source).toMatch(/resolveCliCommand\('prisma'/);
     expect(source).toMatch(/resolveCliCommand\('next'/);
@@ -79,16 +102,28 @@ describe('scripts/build.js (P1-12)', () => {
 });
 
 describe('resolveCliCommand', () => {
-  it('memakai binary lokal repo ini (npm/bun/pnpm tidak relevan)', () => {
-    const local = localBinPath('prisma');
+  it('memakai entry point JS lokal repo ini (npm/bun/pnpm tidak relevan)', () => {
+    const entry = localEntryPath('prisma');
     const command = resolveCliCommand('prisma', ['generate']);
 
-    if (existsSync(local)) {
-      expect(command).toEqual({ file: local, args: ['generate'] });
+    if (entry) {
+      expect(command).toEqual({ file: process.execPath, args: [entry, 'generate'] });
+    } else if (process.platform !== 'win32' && existsSync(localBinPath('prisma'))) {
+      expect(command).toEqual({ file: localBinPath('prisma'), args: ['generate'] });
     } else {
       // Lingkungan eksotis (PnP): harus tetap ada fallback, bukan crash.
       expect(['bunx', 'npx']).toContain(command?.file);
     }
+  });
+
+  it('entry point JS disuntikkan tanpa menyentuh filesystem', () => {
+    const entry = path.join('/repo', 'node_modules', 'prisma', 'build', 'index.js');
+    const command = resolveCliCommand('prisma', ['generate'], {
+      cwd: '/repo',
+      exists: (file: string) => file === entry,
+      available: () => false,
+    });
+    expect(command).toEqual({ file: process.execPath, args: [entry, 'generate'] });
   });
 
   it('tidak menyentuh filesystem/PATH saat dependensinya disuntik', () => {

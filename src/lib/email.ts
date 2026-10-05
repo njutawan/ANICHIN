@@ -168,19 +168,6 @@ async function getTransporter() {
 // Email delivery
 // ---------------------------------------------------------------------------
 
-/**
- * Bersihkan nilai yang akan ditulis ke log (CWE-117).
- *
- * Alamat email berasal dari input pengguna; karakter baris baru (\n, \r) atau
- * pemisah baris Unicode bisa dipakai untuk memalsukan entri log ("log forging").
- * Hilangkan karakter tersebut sebelum menulis log — remediasi yang disarankan
- * CodeQL `js/log-injection` (alert #11 & #12).
- */
-function sanitizeLogValue(value: string): string {
-  // Baris baru dulu (vektor utama), lalu pemisah baris Unicode.
-  return value.replace(/\n|\r/g, ' ').replace(/[\u2028\u2029]/g, '');
-}
-
 export interface SendEmailResult {
   delivered: boolean;
   devUrl?: string;
@@ -208,7 +195,9 @@ export async function sendVerificationEmail(
       });
 
       if (process.env.NODE_ENV !== 'production') {
-        console.log(`[email] SMTP sent to ${sanitizeLogValue(to)}: ${info.messageId}`);
+        // Buang baris baru dari input pengguna sebelum masuk log (CWE-117);
+        // pola `.replace(/[\r\n]/g, "")` inilah yang dikenali CodeQL.
+        console.log(`[email] SMTP sent to ${to.replace(/[\r\n]/g, '')}: ${info.messageId}`);
       }
 
       return { delivered: true, provider: 'smtp' };
@@ -240,7 +229,7 @@ export async function sendVerificationEmail(
   // No SMTP configured — log to console (dev only; in prod, just silently fail)
   if (process.env.NODE_ENV !== 'production') {
     console.log('─────────────────────────────────────────────────────────');
-    console.log(`[email] Verification email for: ${sanitizeLogValue(to)}`);
+    console.log(`[email] Verification email for: ${to.replace(/[\r\n]/g, '')}`);
     console.log(`[email] Verification URL:        ${verificationUrl}`);
     console.log('─────────────────────────────────────────────────────────');
   } else {

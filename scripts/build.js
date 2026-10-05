@@ -19,26 +19,19 @@ const { resolveCliCommand, formatCliCommand } = require('./lib/resolve-cli');
 
 const isVercel = process.env.VERCEL === '1';
 const isStandalone = !isVercel && process.env.DEPLOY_TARGET === 'standalone';
-const isWindows = process.platform === 'win32';
 
 /**
  * Jalankan `{ file, args }` TANPA shell dan kembalikan sukses/gagal.
  *
  * Tidak ada string perintah yang digabung lalu di-parse shell — itu sumber
  * temuan CodeQL `js/shell-command-injection-from-environment` (alert #8 & #9)
- * dan `js/indirect-command-line-injection` (alert #10): path absolut maupun
- * argumen dari `process.argv` tidak boleh diterjemahkan oleh shell.
- *
- * Di Windows, shim `.cmd`/`.bat` tidak bisa di-spawn langsung (Node ≥20.12),
- * jadi dijalankan lewat `cmd.exe` dengan argv terpisah — tetap tanpa
- * menyusun string perintah.
+ * dan `js/indirect-command-line-injection` (alert #10). Resolver memilih file
+ * JS entry point milik paket dan menjalankannya lewat `process.execPath`,
+ * jadi tidak ada interpreter perantara yang bisa disalahgunakan, termasuk
+ * untuk path yang mengandung spasi.
  */
 function runCli(invocation) {
-  const options = { stdio: 'inherit' };
-  const result =
-    isWindows && /\.(cmd|bat)$/i.test(invocation.file)
-      ? spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', invocation.file, ...invocation.args], options)
-      : spawnSync(invocation.file, invocation.args, options);
+  const result = spawnSync(invocation.file, invocation.args, { stdio: 'inherit' });
   return !result.error && result.status === 0;
 }
 
