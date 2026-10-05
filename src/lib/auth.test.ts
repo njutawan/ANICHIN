@@ -58,7 +58,7 @@ describe('isValidEmail', () => {
 describe('isGoogleClientId (alert CodeQL js/incomplete-url-substring-sanitization)', () => {
   it('menerima client ID Google yang valid', () => {
     expect(isGoogleClientId('123456789012-abcdefghijklmnop.apps.googleusercontent.com')).toBe(true);
-    expect(isGoogleClientId('1-abc_DEF.apps.googleusercontent.com')).toBe(true);
+    expect(isGoogleClientId('123456-abc_DEF123.apps.googleusercontent.com')).toBe(true);
   });
 
   it('menolak nilai yang hanya memuat domain sebagai substring', () => {
@@ -73,5 +73,7 @@ describe('isGoogleClientId (alert CodeQL js/incomplete-url-substring-sanitizatio
     expect(isGoogleClientId('')).toBe(false);
     expect(isGoogleClientId('apps.googleusercontent.com')).toBe(false);
     expect(isGoogleClientId('123456789012.apps.googleusercontent.com')).toBe(false);
+    // Prefix nomor proyek harus angka; `1-abc` tidak lolos pola format.
+    expect(isGoogleClientId('1-abc.apps.googleusercontent.com')).toBe(false);
   });
 });
