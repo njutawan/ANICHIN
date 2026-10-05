@@ -16,6 +16,16 @@ const { dbMock, loggerMock, headersMock } = vi.hoisted(() => ({
   headersMock: vi.fn(),
 }));
 
+// `SITE_URL` (src/lib/site.ts) dibaca saat module load. CI menyetel
+// NEXTAUTH_URL=http://localhost:3000 dan developer bisa punya .env sendiri,
+// jadi netralkan env *sebelum* import agar assertion URL absolut di bawah
+// deterministik (menguji fallback DEFAULT_SITE_URL). Pola yang sama dipakai di
+// src/lib/anime-seo.test.ts — tanpa ini test lulus lokal tapi gagal di CI.
+vi.hoisted(() => {
+  delete process.env.NEXT_PUBLIC_SITE_URL;
+  delete process.env.NEXTAUTH_URL;
+});
+
 vi.mock('@/lib/db', () => ({ db: dbMock }));
 vi.mock('@/lib/logger', () => ({ logger: loggerMock }));
 vi.mock('next/headers', () => ({ headers: headersMock }));
