@@ -11,8 +11,14 @@ import {
   listQuerySchema,
   REVIEW_MAX_LENGTH,
 } from '@/lib/validation';
+import { isRecordNotFound } from '@/lib/prisma-errors';
 
-const CACHE_HEADERS = { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300' };
+/**
+ * Ulasan = konten buatan pengguna: jangan di-cache CDN. Sama seperti komentar,
+ * `s-maxage=60` membuat ulasan yang baru dikirim tidak muncul (bahkan bagi
+ * penulisnya) sampai cache CDN kedaluwarsa. Lihat `api/comments/route.ts`.
+ */
+const NO_STORE = { 'Cache-Control': 'no-store' };
 
 // GET reviews for an anime (dengan paginasi cursor)
 export async function GET(req: NextRequest) {
@@ -42,22 +48,37 @@ export async function GET(req: NextRequest) {
     const { limit, cursor } = listParams.data;
 
     // limit + 1 untuk mendeteksi halaman berikutnya.
-    const rows = await db.serverReview.findMany({
-      where: { animeSlug },
-      orderBy: { createdAt: 'desc' },
-      take: limit + 1,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-      include: {
-        user: { select: { name: true, avatar: true } },
-      },
-    });
+    // `orderBy` majemuk (createdAt + id) = urutan stabil antar halaman; dengan
+    // kunci tunggal, ulasan yang dibuat pada milidetik yang sama bisa terlewat
+    // atau tampil dua kali saat membaca halaman berikutnya.
+    let rows;
+    try {
+      rows = await db.serverReview.findMany({
+        where: { animeSlug },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+        include: {
+          user: { select: { name: true, avatar: true } },
+        },
+      });
+    } catch (err) {
+      // Cursor menunjuk ulasan yang sudah dihapus → 400 (bukan 500).
+      if (cursor && isRecordNotFound(err)) {
+        return NextResponse.json(
+          { error: 'Cursor sudah tidak valid. Muat ulang daftar ulasan.' },
+          { status: 400 }
+        );
+      }
+      throw err;
+    }
 
     const hasMore = rows.length > limit;
     const reviews = hasMore ? rows.slice(0, limit) : rows;
     const nextCursor = hasMore ? reviews[reviews.length - 1]?.id ?? null : null;
 
     return addRateLimitHeaders(
-      NextResponse.json({ reviews, hasMore, nextCursor }, { headers: CACHE_HEADERS }),
+      NextResponse.json({ reviews, hasMore, nextCursor }, { headers: NO_STORE }),
       'read'
     );
   } catch {

@@ -12,6 +12,8 @@ import { cn } from '@/lib/utils';
 
 interface ServerReview {
   id: string;
+  /** Pemilik ulasan — dipakai untuk menampilkan tombol Hapus hanya ke penulis/admin. */
+  userId: string;
   rating: number;
   comment: string;
   likes: number;
@@ -92,22 +94,34 @@ export function ReviewsTab({ slug, animeTitle, baseScore }: ReviewsTabProps) {
     toast.success('Liked');
   };
 
-  // Delete review (admin or author only)
-  const handleDelete = async (reviewId: string) => {
-    try {
-      const res = await fetch('/api/reviews', {
+  // Delete review (admin or author only).
+  // Sebelumnya memanggil `DELETE /api/reviews` (endpoint yang tidak ada) dan
+  // membiarkan respons gagal tanpa pesan apa pun. Sekarang memakai route
+  // `/api/reviews/[id]` dan selalu memberi umpan balik ke pengguna.
+  const deleteMutation = useMutation({
+    mutationFn: async (reviewId: string) => {
+      const res = await fetch(`/api/reviews/${encodeURIComponent(reviewId)}`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reviewId }),
       });
-      if (res.ok) {
-        toast.success('Ulasan dihapus');
-        queryClient.invalidateQueries({ queryKey: ['reviews', slug] });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || 'Gagal hapus ulasan');
       }
-    } catch {
-      toast.error('Gagal hapus ulasan');
-    }
-  };
+      return res.json();
+    },
+    onSuccess: () => {
+      toast.success('Ulasan dihapus');
+      queryClient.invalidateQueries({ queryKey: ['reviews', slug] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message);
+    },
+  });
+
+  /** Penulis ulasan sendiri atau admin. */
+  const canDelete = (review: ServerReview) =>
+    Boolean(session?.user) &&
+    (session?.user?.id === review.userId || session?.user?.role === 'admin');
 
   return (
     <div className="space-y-4">
@@ -260,12 +274,13 @@ export function ReviewsTab({ slug, animeTitle, baseScore }: ReviewsTabProps) {
                     >
                       <ThumbsUp className="h-3 w-3" /> {review.likes || 0}
                     </button>
-                    {(((session?.user) as any)?.id === review.user.name || ((session?.user) as any)?.role === 'admin') && (
+                    {canDelete(review) && (
                       <button
-                        onClick={() => handleDelete(review.id)}
-                        className="flex items-center gap-1 text-xs text-foreground/60 hover:text-red-400 transition-colors"
+                        onClick={() => deleteMutation.mutate(review.id)}
+                        disabled={deleteMutation.isPending && deleteMutation.variables === review.id}
+                        className="flex items-center gap-1 text-xs text-foreground/60 hover:text-red-400 transition-colors disabled:opacity-40"
                       >
-                        <Trash2 className="h-3 w-3" /> Hapus
+                        <Trash2 className="h-3 w-3" /> {deleteMutation.isPending && deleteMutation.variables === review.id ? 'Menghapus…' : 'Hapus'}
                       </button>
                     )}
                   </div>

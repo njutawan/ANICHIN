@@ -245,9 +245,18 @@ export function EpisodeComments({ animeSlug, episodeNumber, animeTitle }: Episod
                           </div>
                           <p className="text-xs text-foreground/80 mt-1 whitespace-pre-wrap">{c.comment}</p>
                           <div className="flex items-center gap-3 mt-1.5">
-                            <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                              <ThumbsUp className="h-3 w-3" /> {c.likes > 0 ? c.likes : 'Suka'}
-                            </span>
+                            {/* Hanya tampilkan jumlah suka kalau memang ada.
+                                Sebelumnya selalu tampil label "Suka" yang terlihat
+                                seperti tombol padahal tidak bisa diklik (likes
+                                belum punya endpoint/buku besar per pengguna). */}
+                            {c.likes > 0 && (
+                              <span
+                                className="flex items-center gap-1 text-xs text-muted-foreground"
+                                title="Jumlah suka"
+                              >
+                                <ThumbsUp className="h-3 w-3" /> {c.likes}
+                              </span>
+                            )}
                             {canDelete(c) && (
                               <button
                                 onClick={() => deleteMutation.mutate(c.id)}

@@ -1,0 +1,14 @@
+# Pemilik kode — review otomatis diminta dari maintainer untuk perubahan apa pun.
+# Ganti handle di bawah kalau maintainer bertambah/berubah.
+#
+# Catatan: berkas ini hanya berpengaruh kalau branch default memakai aturan
+# "Require review from Code Owners" (Settings → Branches).
+* @njutawan
+
+# Perubahan pada pipeline deploy & keamanan sebaiknya tidak di-merge tanpa
+# review maintainer, walau nanti aturan branch dilonggarkan.
+/.github/ @njutawan
+/Dockerfile @njutawan
+/docker-compose.prod.yml @njutawan
+/Caddyfile @njutawan
+/SECURITY.md @njutawan

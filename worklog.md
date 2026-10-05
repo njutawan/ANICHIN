@@ -3538,3 +3538,38 @@ Stage Summary:
 - No regressions: 118/118 tests still pass, build still succeeds, lint clean.
 - Security posture: Strong. Server-side auth on all protected routes, admin role enforced via requireAdmin() + middleware, password hashing with bcrypt cost 10, anti-enumeration on forgot-password, rate limiting on all auth endpoints, CSP nonce-based (no unsafe-inline), all user content rendered via React JSX (auto-escaped), zero raw SQL, zero file upload surface.
 - Next actions: (1) User pulls latest code via deploy zip. (2) Verifies .env is NOT in their git history (already cleaned). (3) Tests password reset flow end-to-end: forgot-password → email link → reset-password page → login with new password.
+
+---
+Task ID: 43-P2-LANJUTAN
+Agent: Arena Agent Mode
+Task: Verifikasi + lanjutkan item P2 (versi cache sw.js, Dependabot, SECURITY.md, E2E, komentar modal → /api/comments) dan menutup sisa pekerjaan P2 di docs/CODE-REVIEW.md.
+
+Work Log:
+- **Audit awal:** kelima item yang diminta ternyata **sudah ada di `main`** (commit 07c2ba7). Jadi pekerjaan difokuskan ke verifikasi independen + memperbaiki cacat nyata + menutup item P2 yang masih terbuka (daftar "Sisa pekerjaan" di docs/CODE-REVIEW.md).
+- **Verifikasi tooling:** environment sandbox tidak bisa mengunduh engine Prisma (`binaries.prisma.sh` diblokir) atau browser Playwright (CDN diblokir), jadi dibuat stub lokal `node_modules/.prisma/client` (tidak di-commit) supaya `tsc --noEmit` dan seluruh suite vitest bisa dijalankan. Hasil: **tsc bersih**, **290 test hijau** sebelum perubahan lanjutan.
+  - `sw.js`: route `force-static` menyuntikkan `NEXT_PUBLIC_BUILD_ID` (dari `next.config.ts` → SHA/timestamp) ke `CACHE_VERSION`; header `no-store` + `Service-Worker-Allowed: /`; CSP memuat `'self'` sehingga registrasi SW tidak diblokir nonce. Tidak ada perubahan diperlukan.
+  - Dependabot: YAML valid (di-parse), `package-ecosystem: bun` memang didukung Dependabot (butuh `bun.lock` teks ≥ Bun 1.1.39 — cocok) dan `groups` berlaku untuk ekosistem ini. `bun.lock` juga terbukti tidak berubah oleh `bun install --frozen-lockfile`.
+  - E2E: seluruh asersi dicek satu per satu ke kode nyata (404 page, /offline, robots, manifest, /sw.js, image optimizer, kontrak API komentar, `filter({visible:true})` didukung Playwright 1.63, `browser.newContext()` mewarisi `baseURL`). Konfigurasi webServer + DB seed konsisten. **Tidak dapat dijalankan di sandbox** (browser CDN diblokir) — verifikasi runtime tetap di CI.
+- **Cacat nyata yang ditemukan & diperbaiki (P2 lanjutan):**
+  1. `DELETE /api/reviews` **tidak ada** padahal `reviews-tab.tsx` memanggilnya; syarat tampil tombol juga salah (`session.user.id === review.user.name` via `as any`) sehingga penulis ulasan tidak pernah bisa menghapus ulasannya sendiri, dan kegagalan respons tidak pernah diberi pesan. → Route baru `src/app/api/reviews/[id]/route.ts` (penulis/admin, 400/401/403/404/429 konsisten dengan komentar), UI memakai `review.userId` + endpoint baru + toast error. 9 + 4 test.
+  2. Daftar komentar & ulasan di-cache CDN (`public, s-maxage=60`) → komentar yang baru dikirim bisa tidak terlihat (termasuk oleh penulisnya) sampai cache kedaluwarsa. → `Cache-Control: no-store`.
+  3. Paginasi cursor memakai `orderBy: { createdAt: 'desc' }` tanpa tie-breaker → baris bisa terlewat/ganda antar halaman pada timestamp yang sama. → `[{createdAt:'desc'},{id:'desc'}]`.
+  4. Cursor yang menunjuk baris terhapus berakhir `500`. → helper `src/lib/prisma-errors.ts` (P2025) → `400`; `delete` yang balapan → `404` (komentar & ulasan).
+  5. Slug pada `GET /api/comments` tidak divalidasi (padahal POST & GET reviews memvalidasinya). → `animeSlugSchema` → `400`.
+  6. Beranda kehilangan hampir semua HTML saat DB down: `hero-slider.tsx` & `structured-data.tsx` melempar ke error boundary (temuan #1 "sisa pekerjaan"). → fallback: hero `null` + `logger.error`, JSON-LD tetap statis (Breadcrumb/FAQ). 4 test.
+  7. JSON-LD `url` anime masih `/?anime=<slug>` (canonical = beranda) padahal halaman kanonik sudah ada sejak P0-5. → `animeUrl()` (`/anime/<slug>`) + test.
+  8. Label "Suka" selalu tampil walau tidak bisa diklik (tidak ada endpoint likes). → chip hanya muncul saat `likes > 0` + test.
+  9. CI mengunggah artefak `coverage/` yang tidak pernah dibuat. → `@vitest/coverage-v8`, `coverage.thresholds` (58/52/50/60 vs hasil nyata 65,5/59,2/56,3/67,7), skrip `test:coverage` dipakai job `test`; artefak kini berisi `lcov.info` + `lcov-report/`.
+  10. Repo hygiene: `CODEOWNERS`, `pull_request_template.md`, `ISSUE_TEMPLATE/config.yml` + `bug_report.yml`; `SECURITY.md` dikoreksi (11 security header, bukan 9) dan menjelaskan bahwa **private vulnerability reporting repo masih `disabled`** (diverifikasi lewat API; token tanpa izin admin) + langkah mengaktifkannya & kanal fallback.
+  11. `ai.txt`/`llms.txt`: rute kanonik `/anime/<slug>` didaftarkan; `/api/admin/` di `ai.txt` dibuang. Klaim "download" **diverifikasi akurat** (tab Download + `download480/720/1080`) sehingga sengaja tidak dihapus.
+
+QA / Verification:
+- `bunx tsc --noEmit`: bersih (dengan stub Prisma lokal; stub tidak di-commit).
+- `bun run test`: 32 file / 290 test → setelah perubahan: 33 file / 294 test, semuanya hijau.
+- `bun run test:coverage`: hijau, threshold terpenuhi (Statements 65,5%, Branches 59,2%, Functions 56,3%, Lines 67,7%), artefak `coverage/` dihasilkan.
+- `bun run lint`: dijalankan pada akhir.
+- Tidak bisa dijalankan di sandbox: `next build` & Playwright (engine Prisma + browser CDN diblokir). CI yang akan memverifikasi keduanya.
+
+Stage Summary:
+- Kelima item P2 yang diminta sudah ada di `main` dan terverifikasi (dengan catatan E2E hanya bisa dibuktikan di CI). Sebelas cacat/kelalaian nyata ditemukan lewat audit ulang dan sudah diperbaiki, termasuk dua bug yang terlihat pengguna (tombol Hapus ulasan mati total; beranda kosong saat DB down) dan dua bug kebenaran data (komentar baru bisa tertahan cache CDN; paginasi tidak stabil).
+- Sisa yang belum dikerjakan (bukan blocker): audit a11y/axe di CI, template issue tambahan, follow-up "likes" (butuh endpoint + buku besar per pengguna), dan pengaktifan private vulnerability reporting (butuh izin admin repo).

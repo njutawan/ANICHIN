@@ -6,17 +6,14 @@
 
 User-agent: GPTBot
 Allow: /
-Disallow: /api/admin/
 Disallow: /api/auth/
 
 User-agent: Claude-Web
 Allow: /
-Disallow: /api/admin/
 Disallow: /api/auth/
 
 User-agent: PerplexityBot
 Allow: /
-Disallow: /api/admin/
 Disallow: /api/auth/
 
 User-agent: Google-Extended
@@ -24,11 +21,11 @@ Allow: /
 
 User-agent: *
 Allow: /
-Disallow: /api/admin/
 Disallow: /api/auth/
 
 # Structured data available at:
 # /llms.txt — site guidance for AI
-# /sitemap.xml — all URLs
+# /sitemap.xml — all URLs (including canonical /anime/<slug> pages)
+# /anime/<slug> — canonical, server-rendered anime page (JSON-LD included)
 # /api/anime/[slug]/jsonld — structured data per anime
 # /api/anime/[slug]/og — OpenGraph metadata per anime

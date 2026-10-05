@@ -1,0 +1,59 @@
+name: 🐞 Laporan bug
+description: Laporkan bug yang bisa direproduksi (bukan kerentanan keamanan)
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ⚠️ **Jangan laporkan kerentanan keamanan di sini.** Gunakan
+        [private vulnerability reporting](https://github.com/njutawan/ANICHIN/security/advisories/new)
+        — lihat [SECURITY.md](https://github.com/njutawan/ANICHIN/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: apa-yang-terjadi
+    attributes:
+      label: Apa yang terjadi?
+      description: Perilaku yang kamu lihat + yang kamu harapkan.
+    validations:
+      required: true
+
+  - type: textarea
+    id: langkah
+    attributes:
+      label: Langkah reproduksi
+      placeholder: |
+        1. Buka /anime/shadow-blade
+        2. Klik "Tonton Sekarang"
+        3. Kirim komentar
+        4. …
+    validations:
+      required: true
+
+  - type: input
+    id: versi
+    attributes:
+      label: Commit / versi
+      description: Hasil `git rev-parse --short HEAD` (atau URL deployment).
+    validations:
+      required: false
+
+  - type: dropdown
+    id: cara-deploy
+    attributes:
+      label: Cara deploy
+      options:
+        - "Docker (docker-compose.prod.yml)"
+        - "Vercel"
+        - "Bare metal / VPS"
+        - "`bun run dev` lokal"
+    validations:
+      required: false
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Log / tangkapan layar
+      description: Hapus dulu data pribadi, token, dan secret sebelum menempel.
+    validations:
+      required: false

@@ -21,6 +21,26 @@ export default defineConfig({
       // Ensure dev-only fallback paths are exercised (not production guards).
       NODE_ENV: 'test',
     },
+    /**
+     * Coverage (P2). Sebelumnya CI mengunggah folder `coverage/` yang tidak
+     * pernah dibuat — tidak ada `@vitest/coverage-v8` maupun threshold, jadi
+     * artefak selalu kosong. `test:coverage` dipakai job `test` di CI.
+     *
+     * Threshold di bawah adalah **penjaga regresi**, bukan target: angkanya
+     * diset beberapa poin di bawah hasil nyata (65% statements / 68% lines)
+     * supaya penambahan kode yang belum teruji tidak langsung memerahkan CI,
+     * tapi penurunan cakupan yang signifikan akan terlihat.
+     */
+    coverage: {
+      provider: 'v8',
+      reporter: ['text-summary', 'lcov', 'json-summary'],
+      thresholds: {
+        statements: 58,
+        branches: 52,
+        functions: 50,
+        lines: 60,
+      },
+    },
   },
   resolve: {
     alias: {

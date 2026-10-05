@@ -49,7 +49,9 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     "no-useless-escape": "off",
   },
 }, {
-  ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "skills", "public/sw.js"]
+  // `coverage/**` = artefak `bun run test:coverage` (di-gitignore) — jangan
+  // di-lint; `public/sw.js` tidak ada lagi (SW dilayani route handler).
+  ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "coverage/**", "next-env.d.ts", "skills"]
 }];
 
 export default eslintConfig;
