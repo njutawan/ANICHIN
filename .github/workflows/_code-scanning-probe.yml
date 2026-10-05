@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Ambil daftar alert (state=open)
+      - name: Ambil daftar alert (state=open) — bagian 1
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -32,8 +32,9 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/code-scanning/alerts?state=open&per_page=100" > /tmp/open.code
-          python3 - <<'PY'
+          ALERT_OFFSET=0 ALERT_LIMIT=6 python3 - <<'PY'
           import json
+          import os
           code = open('/tmp/open.code').read().strip()
           try:
               data = json.load(open('/tmp/open.json'))
@@ -43,8 +44,46 @@ jobs:
           if isinstance(data, dict):
               print("::error title=CS-PROBE-HTTP::HTTP %s - %s" % (code, data.get('message', 'unknown')))
               raise SystemExit(0)
-          print("::notice title=CS-OPEN-COUNT::HTTP %s - open alerts = %d" % (code, len(data)))
-          for alert in data[:9]:
+          offset = int(os.environ.get('ALERT_OFFSET', '0'))
+          limit = int(os.environ.get('ALERT_LIMIT', '6'))
+          print("::notice title=CS-OPEN-COUNT::HTTP %s - open alerts = %d (menampilkan %d-%d)" % (
+              code, len(data), offset + 1, min(offset + limit, len(data))))
+          for alert in data[offset:offset + limit]:
+              rule = alert.get('rule', {})
+              inst = alert.get('most_recent_instance', {}) or {}
+              loc = inst.get('location', {}) or {}
+              msg = (inst.get('message', {}) or {}).get('text', '') or rule.get('description', '')
+              msg = ' '.join(str(msg).split())[:150]
+              sev = rule.get('security_severity_level') or rule.get('severity')
+              line = "#%s %s [%s] %s:%s :: %s" % (
+                  alert.get('number'), rule.get('id'), sev, loc.get('path'), loc.get('start_line'), msg)
+              print("::warning title=CS-OPEN::%s" % line)
+          PY
+
+      - name: Ambil daftar alert (state=open) — bagian 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          curl -sS -o /tmp/open.json -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/code-scanning/alerts?state=open&per_page=100" > /tmp/open.code
+          ALERT_OFFSET=6 ALERT_LIMIT=6 python3 - <<'PY'
+          import json
+          import os
+          code = open('/tmp/open.code').read().strip()
+          try:
+              data = json.load(open('/tmp/open.json'))
+          except Exception as exc:
+              print("::error title=CS-PROBE-PARSE2::HTTP %s - gagal parse JSON (%s)" % (code, exc))
+              raise SystemExit(0)
+          if isinstance(data, dict):
+              print("::error title=CS-PROBE-HTTP2::HTTP %s - %s" % (code, data.get('message', 'unknown')))
+              raise SystemExit(0)
+          offset = int(os.environ.get('ALERT_OFFSET', '6'))
+          limit = int(os.environ.get('ALERT_LIMIT', '6'))
+          for alert in data[offset:offset + limit]:
               rule = alert.get('rule', {})
               inst = alert.get('most_recent_instance', {}) or {}
               loc = inst.get('location', {}) or {}
