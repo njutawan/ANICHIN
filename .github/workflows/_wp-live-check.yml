@@ -1,8 +1,10 @@
 # ============================================================================
 # SEMENTARA — probe pasif situs WordPress (anichin.id)
-# Dibuat atas permintaan pemilik situs untuk audit pasif: hanya GET/HEAD ke URL
-# publik, tanpa fuzzing, tanpa brute force, tanpa payload. File ini DIHAPUS
-# setelah hasilnya dibaca.
+# Atas permintaan pemilik situs: hanya GET/HEAD ke URL publik, tanpa fuzzing,
+# tanpa brute force, tanpa payload. File ini DIHAPUS setelah hasilnya dibaca.
+#
+# Catatan: GitHub membatasi jumlah anotasi per step, jadi hasil dikumpulkan ke
+# satu berkas lalu dikirim sebagai beberapa anotasi besar.
 # ============================================================================
 name: _wp-live-check
 
@@ -25,53 +27,68 @@ jobs:
         run: |
           set +e
           U=https://anichin.id
-          note() { printf '::warning title=%s::%s\n' "$1" "$2"; }
+          R=/tmp/report.txt
+          : > "$R"
+          add() { printf '%s\n' "$*" >> "$R"; }
 
-          # ── 1. Status + header keamanan root ─────────────────────────────
-          code=$(curl -sS -m 20 -o /dev/null -w '%{http_code} http=%{http_version} redirect=%{redirect_url} tlsverify=%{ssl_verify_result}' "$U/" 2>&1)
-          note "root" "$code"
-          curl -sS -m 20 -D /tmp/h -o /dev/null "$U/" 2>/dev/null
-          have() { grep -i "^$1:" /tmp/h | head -1 | tr -d '\r' | cut -c1-160; }
-          note "hsts" "$(have strict-transport-security || echo TIDAK-ADA)"
-          note "csp" "$(have content-security-policy || echo TIDAK-ADA)"
-          note "x-frame-options" "$(have x-frame-options || echo TIDAK-ADA)"
-          note "x-content-type-options" "$(have x-content-type-options || echo TIDAK-ADA)"
-          note "referrer-policy" "$(have referrer-policy || echo TIDAK-ADA)"
-          note "permissions-policy" "$(have permissions-policy || echo TIDAK-ADA)"
-          note "server-x-powered-by" "$(have server) | $(have x-powered-by || echo x-powered-by:TIDAK-ADA)"
+          add "== ROOT =="
+          add "status: $(curl -sS -m 20 -o /dev/null -w '%{http_code} http=%{http_version} redirect=%{redirect_url} tls_verify=%{ssl_verify_result}' "$U/")"
+          curl -sS -m 20 -D /tmp/h -o /tmp/home "$U/" 2>/dev/null
+          add "-- headers --"
+          tr -d '\r' < /tmp/h | sed -n '1,40p' >> "$R"
+          add "-- cookie root --"
+          grep -i '^set-cookie' /tmp/h | tr -d '\r' | cut -c1-200 >> "$R"
 
-          # ── 2. Redirect http → https ────────────────────────────────────
-          note "http-redirect" "$(curl -sS -m 20 -o /dev/null -w '%{http_code} -> %{redirect_url}' http://anichin.id/ 2>&1)"
+          add ""
+          add "== HTTP→HTTPS =="
+          add "$(curl -sS -m 20 -o /dev/null -w '%{http_code} -> %{redirect_url}' http://anichin.id/)"
 
-          # ── 3. REST API & enumerasi user ────────────────────────────────
-          note "wp-json" "$(curl -sS -m 20 -o /dev/null -w '%{http_code}' "$U/wp-json/" 2>&1)"
-          u=$(curl -sS -m 20 -o /tmp/users -w '%{http_code}' "$U/wp-json/wp/v2/users" 2>&1)
-          note "wp-json-users" "status=$u jumlah_slug=$(grep -o '\"slug\"' /tmp/users 2>/dev/null | wc -l)"
-          note "author-enum" "$(curl -sS -m 20 -o /dev/null -w '%{http_code} -> %{redirect_url}' "$U/?author=1" 2>&1)"
+          add ""
+          add "== REST API / ENUMERASI =="
+          add "wp-json status: $(curl -sS -m 20 -o /dev/null -w '%{http_code}' "$U/wp-json/")"
+          add "wp-json/wp/v2/users: $(curl -sS -m 20 -o /tmp/users -w '%{http_code}' "$U/wp-json/wp/v2/users") jumlah_slug=$(grep -o '"slug"' /tmp/users | wc -l)"
+          add "?author=1: $(curl -sS -m 20 -o /dev/null -w '%{http_code} -> %{redirect_url}' "$U/?author=1")"
+          add "rest users route (alt): $(curl -sS -m 20 -o /tmp/users2 -w '%{http_code}' "$U/?rest_route=/wp/v2/users") jumlah_slug=$(grep -o '"slug"' /tmp/users2 | wc -l)"
 
-          # ── 4. Endpoint klasik WordPress ────────────────────────────────
-          note "xmlrpc" "$(curl -sS -m 20 -o /tmp/x -w '%{http_code}' "$U/xmlrpc.php" 2>&1) | $(head -c 80 /tmp/x | tr '\n' ' ')"
-          note "readme.html" "$(curl -sS -m 20 -o /tmp/r -w '%{http_code}' "$U/readme.html" 2>&1) | $(grep -io 'Version [0-9.]*' /tmp/r 2>/dev/null | head -1)"
-          note "wp-login" "$(curl -sS -m 20 -o /dev/null -w '%{http_code}' "$U/wp-login.php" 2>&1)"
-          curl -sS -m 20 -D /tmp/l -o /dev/null "$U/wp-login.php" 2>/dev/null
-          note "wp-login-cookie" "$(grep -i '^set-cookie' /tmp/l | head -1 | tr -d '\r' | cut -c1-140)"
-          note "uploads-listing" "$(curl -sS -m 20 -o /dev/null -w '%{http_code}' "$U/wp-content/uploads/" 2>&1)"
-          note "sitemap" "$(curl -sS -m 20 -o /dev/null -w '%{http_code}' "$U/wp-sitemap.xml" 2>&1)"
-          note "robots" "$(curl -sS -m 20 "$U/robots.txt" 2>/dev/null | head -c 200 | tr '\n' ' ')"
+          add ""
+          add "== ENDPOINT KLASIK =="
+          add "xmlrpc.php: $(curl -sS -m 20 -o /tmp/x -w '%{http_code}' "$U/xmlrpc.php") | $(head -c 90 /tmp/x | tr '\n' ' ')"
+          add "readme.html: $(curl -sS -m 20 -o /tmp/r -w '%{http_code}' "$U/readme.html") | $(grep -io 'Version [0-9.]*' /tmp/r | head -1)"
+          add "wp-login.php: $(curl -sS -m 20 -o /tmp/l -w '%{http_code}' "$U/wp-login.php") | register: $(grep -ci 'wp-login.php?action=register' /tmp/l)"
+          add "wp-login cookie: $(grep -i '^set-cookie' /tmp/l | head -1 | tr -d '\r' | cut -c1-160)"
+          add "wp-content/uploads/: $(curl -sS -m 20 -o /dev/null -w '%{http_code}' "$U/wp-content/uploads/")"
+          add "wp-sitemap.xml: $(curl -sS -m 20 -o /dev/null -w '%{http_code}' "$U/wp-sitemap.xml")"
+          add "wp-cron.php: $(curl -sS -m 20 -o /dev/null -w '%{http_code}' "$U/wp-cron.php")"
+          add "robots.txt: $(curl -sS -m 20 "$U/robots.txt" | head -c 160 | tr '\n' ' ')"
 
-          # ── 5. Berkas sensitif yang umum bocor (404 = bagus) ────────────
-          for p in /.env /wp-config.php.bak /wp-config.php~ /.git/config /backup.zip /wp-content/debug.log /.well-known/security.txt; do
-            note "file$p" "$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "$U$p" 2>&1)"
+          add ""
+          add "== BERKAS SENSITIF (harus 404) =="
+          for p in /.env /wp-config.php.bak /wp-config.php~ /.git/config /backup.zip /wp-content/debug.log /.well-known/security.txt /xmlrpc.php?rsd; do
+            add "$p: $(curl -sS -m 15 -o /dev/null -w '%{http_code}' "$U$p")"
           done
 
-          # ── 6. Versi yang terekspos (generator + aset plugin/tema) ──────
-          curl -sS -m 25 -o /tmp/home "$U/" 2>/dev/null
-          note "generator" "$(grep -io '<meta name="generator" content="[^"]*"' /tmp/home | head -1)"
-          note "plugins-terekspos" "$(grep -o 'wp-content/plugins/[a-z0-9._-]*' /tmp/home | sort -u | head -6 | tr '\n' ',')"
-          note "tema" "$(grep -o 'wp-content/themes/[a-z0-9._-]*' /tmp/home | sort -u | head -3 | tr '\n' ',')"
-          note "woocommerce" "$(grep -c 'woocommerce' /tmp/home | tr -d '\n')"
+          add ""
+          add "== VERSI YANG TEREKSPOS =="
+          add "generator: $(grep -io '<meta name=\"generator\" content=\"[^\"]*\"' /tmp/home | head -1)"
+          add "plugins: $(grep -o 'wp-content/plugins/[a-z0-9._-]*' /tmp/home | sort -u | head -8 | tr '\n' ',')"
+          add "tema: $(grep -o 'wp-content/themes/[a-z0-9._-]*' /tmp/home | sort -u | head -3 | tr '\n' ',')"
+          add "aset?ver=: $(grep -o 'ver=[0-9][0-9.]*' /tmp/home | sort -u | head -8 | tr '\n' ',')"
+          add "wp-includes?ver: $(grep -o 'wp-includes/[a-z.-]*?ver=[0-9.]*' /tmp/home | sort -u | head -5 | tr '\n' ',')"
+          add "security.txt: $(curl -sS -m 15 -o /dev/null -w '%{http_code}' "$U/.well-known/security.txt")"
 
-          # ── 7. Sertifikat TLS ───────────────────────────────────────────
-          cert=$(echo | timeout 20 openssl s_client -connect anichin.id:443 -servername anichin.id 2>/dev/null | openssl x509 -noout -subject -issuer -dates 2>/dev/null | tr '\n' ' ')
-          note "tls" "$cert"
-          note "selesai" "probe pasif selesai"
+          add ""
+          add "== TLS =="
+          add "$(echo | timeout 20 openssl s_client -connect anichin.id:443 -servername anichin.id 2>/dev/null | openssl x509 -noout -subject -issuer -dates 2>/dev/null | tr '\n' ' ')"
+          add "http3 alt-svc: $(grep -i '^alt-svc' /tmp/h | tr -d '\r' || echo TIDAK-ADA)"
+
+          # ── kirim sebagai beberapa anotasi besar (batas 10/step) ─────────
+          esc() { sed 's/%/%25/g; s/\r//g' "$1" | awk '{printf "%s%%0A", $0}'; }
+          total=$(wc -l < "$R")
+          for i in 1 2 3 4 5; do
+            from=$(( (i-1)*22 + 1 )); to=$(( i*22 ))
+            chunk=$(sed -n "${from},${to}p" "$R")
+            [ -z "$chunk" ] && continue
+            msg=$(printf '%s\n' "$chunk" | esc)
+            echo "::warning title=wp $i/5 (baris $from-$to dari $total)::$msg"
+          done
+          echo "SELESAI ($total baris)"
