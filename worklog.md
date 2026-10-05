@@ -3617,3 +3617,22 @@ QA / Verification:
 Stage Summary:
 - App Next.js **belum dipublikasikan**; temuan utama ada di postur repo publik (PVR & Dependabot alerts off), gate CI merah (sudah diperbaiki & hijau di CI), pipeline deploy yang "sukses" tanpa men-deploy, dan dokumen internal (worklog/CODE-REVIEW) yang ikut publik.
 - **Perlu tindakan Anda:** aktifkan PVR + Dependabot alerts di Settings → Code security; merge PR #9; putuskan pipeline deploy (isi secret atau buat gagal keras); tinjau publikasi worklog.md/CODE-REVIEW.md.
+
+---
+Task ID: SECURITY-HARDENING-WP
+Agent: Arena Agent Mode
+Task: (1) Hardening workflow repo publik (T-5) + deploy gagal keras (T-4); (2) audit pasif situs WordPress anichin.id atas izin pemilik.
+
+Work Log:
+- **Hardening (commit `c989c34`):** `permissions: contents: read` di `ci.yml`/`deploy.yml`/`staging.yml` (job CodeQL tetap menimpa dengan `security-events: write`); **36 referensi action dipin ke commit SHA** (checkout, setup-bun, cache, upload-artifact, codeql init/analyze, setup-buildx, login, build-push, slack) memakai tag sebagai komentar; `deploy.yml` kini membaca repository variable `BUILD_ONLY` dan punya **guard** yang `exit 1` bila `DEPLOY_HOST` kosong — sebelumnya langkah deploy/smoke hanya di-skip sehingga push ke `main` tampak hijau padahal tidak men-deploy. CI run `37276422202` (commit `c989c34`): **success**.
+- **Audit pasif WordPress** (izin pemilik, hanya GET/HEAD ke URL publik, tanpa fuzzing/payload) dijalankan dari runner CI sementara karena sandbox tidak punya akses internet; workflow sementara sudah dihapus dari repo. Temuan & bukti lengkap ada di laporan privat `/home/user/laporan-keamanan-anichin-2026-10-05.md` §7 (sengaja tidak ditulis di repo publik).
+- Ringkas: HTTPS/HSTS/TLS/HTTP-3 + WAF Cloudflare (wp-login challenge, xmlrpc 403, uploads 403) + berkas sensitif 404 = baik; temuan utama: **tanpa SPF/DMARC/MX** (padahal app mengirim email dari domain itu) dan **enumerasi user + hash gravatar admin** via `wp-json/wp/v2/users`; plus header keamanan minim, fingerprint versi, dan catatan verifikasi provenance tema/plugin.
+- Catatan: token otomasi tidak bisa menghapus run Actions sementara (403); ID run dicatat di laporan untuk dihapus manual bila diinginkan.
+
+QA / Verification:
+- Ketiga YAML di-parse sebelum push (`js-yaml`); CI `c989c34` hijau (permissions + pin + test).
+- Seluruh hasil probe WP dibaca dari anotasi check-run (bukan asumsi); dua probe awal gagal/kosong dan diperbaiki (YAML invalid, pesan anotasi kosong, batas 10 anotasi per step).
+
+Stage Summary:
+- Hardening repo selesai & terverifikasi CI. Audit WordPress selesai secara pasif dengan bukti mentah; laporan privat diperbarui (TL;DR, §6 urutan aksi, §7 detail WP).
+- **Perlu tindakan Anda:** aktifkan PVR + Dependabot alerts; merge PR #9; putuskan pipeline deploy (isi secret atau set `BUILD_ONLY=true`); tambah SPF/DKIM/DMARC; batasi endpoint users WP; pasang header keamanan di Cloudflare.
