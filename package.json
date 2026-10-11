@@ -27,7 +27,7 @@
     "healthcheck": "curl -s http://localhost:3000/api/health | bun -e 'process.stdin.on(\"data\",d=>{try{const j=JSON.parse(d);console.log(j.status=== \"ok\"?\"✓ Healthy\":\"✗ Unhealthy\",j)}catch{}})'"
   },
   "dependencies": {
-    "@prisma/client": "6.19.3",
+    "@prisma/client": "7.10.0",
     "@radix-ui/react-avatar": "^1.2.6",
     "@radix-ui/react-dialog": "^1.1.23",
     "@radix-ui/react-dropdown-menu": "^2.1.24",
