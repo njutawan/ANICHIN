@@ -307,26 +307,31 @@ Server akan listen di `0.0.0.0:3000`. Gunakan reverse proxy (Caddy/Nginx) untuk 
 
 ### 3. Docker (Rekomendasi)
 
-Cara paling cepat — sudah termasuk PostgreSQL + reverse proxy opsional:
+Cara paling cepat — sudah termasuk PostgreSQL + Redis + Caddy (auto-HTTPS):
 
 ```bash
 # Salin env example + isi nilai produksi
 cp .env.example .env
-# Edit: NEXTAUTH_URL, NEXTAUTH_SECRET, POSTGRES_PASSWORD, DATABASE_URL
+# Wajib diisi: NEXTAUTH_URL (https di produksi), NEXTAUTH_SECRET (>=32 char),
+# POSTGRES_PASSWORD. DATABASE_URL dibentuk otomatis oleh compose.
 
 # Build + jalankan semua service
-docker-compose up -d
+# (nama file wajib: hanya docker-compose.prod.yml / staging.yml yang ada di repo)
+docker compose -f docker-compose.prod.yml up -d --build
 
-# Cek status
-docker-compose ps
-docker-compose logs -f web
+# Cek status (urutan: db/redis → migrate (one-shot) → web → caddy)
+docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml logs -f web
 
 # Stop
-docker-compose down
+docker compose -f docker-compose.prod.yml down
 
 # Reset database (hati-hati!)
-docker-compose down -v
+docker compose -f docker-compose.prod.yml down -v
 ```
+
+Panduan lengkap (server baru, registry, pipeline GitHub, rollback):
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 Aplikasi tersedia di `http://localhost:3000` (atau domain yang dikonfigurasi).
 
@@ -334,7 +339,7 @@ Aplikasi tersedia di `http://localhost:3000` (atau domain yang dikonfigurasi).
 
 #### Caddy (Auto-HTTPS via Let's Encrypt)
 
-Uncomment service `caddy` di `docker-compose.prod.yml`, lalu set `SITE_DOMAIN` di `.env`:
+Service `caddy` sudah aktif di `docker-compose.prod.yml` (tanpa perlu di-uncomment) — cukup set `SITE_DOMAIN` di `.env`:
 
 ```env
 SITE_DOMAIN="anichin.id"
@@ -563,10 +568,10 @@ Dockerfile sudah mengonfigurasi `HEALTHCHECK` otomatis:
 
 ```bash
 # Cek status container
-docker inspect --format='{{.State.Health.Status}}' anichin-web
+docker inspect --format='{{.State.Health.Status}}' "$(docker compose -f docker-compose.prod.yml ps -q web)"
 
 # Lihat history healthcheck
-docker inspect --format='{{json .State.Health.Log}}' anichin-web | jq
+docker inspect --format='{{json .State.Health.Log}}' "$(docker compose -f docker-compose.prod.yml ps -q web)" | jq
 ```
 
 ---

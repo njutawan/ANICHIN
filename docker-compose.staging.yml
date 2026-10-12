@@ -7,7 +7,6 @@
 services:
   db:
     image: postgres:16-alpine
-    container_name: anichin-staging-db
     restart: unless-stopped
     environment:
       - POSTGRES_DB=anichin_staging
@@ -25,7 +24,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: anichin-staging-redis
     restart: unless-stopped
     ports:
       - "127.0.0.1:6380:6379"
@@ -39,7 +37,9 @@ services:
       target: migrate
       args:
         DATABASE_PROVIDER: postgresql
-    container_name: anichin-staging-migrate
+    # Sama seperti prod: `docker compose pull` hanya menarik service yang punya
+    # nama image, dan rollback bekerja dengan menandai ulang tag ini.
+    image: ${ANICHIN_MIGRATE_IMAGE:-anichin/anichin:staging-migrate}
     restart: "no"
     command: ["bunx", "prisma", "migrate", "deploy"]
     environment:
@@ -56,9 +56,13 @@ services:
       target: runner
       args:
         DATABASE_PROVIDER: postgresql
-    container_name: anichin-staging-web
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-}
+        NEXT_PUBLIC_BUILD_ID: ${NEXT_PUBLIC_BUILD_ID:-}
+    image: ${ANICHIN_IMAGE:-anichin/anichin:staging-current}
     restart: unless-stopped
     ports:
+      # 3001 di host (bukan 3000) — health check dari luar container harus
+      # memakai 3001; healthcheck di dalam compose tetap 3000 (localhost container).
       - "127.0.0.1:3001:3000"
     environment:
       - NODE_ENV=production

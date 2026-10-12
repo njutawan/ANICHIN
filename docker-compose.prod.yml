@@ -1,10 +1,24 @@
 # ============================================================================
 # AniChin — Docker Compose (Production)
 # Services: web + db (PostgreSQL 16) + redis + migrate + backup-cron + caddy
-# Usage:
-#   1. cp .env.example .env  (fill in real values!)
-#   2. docker-compose -f docker-compose.prod.yml up -d
-#   3. https://anichin.id
+#
+# Dua cara menjalankan (keduanya memakai tag image yang sama):
+#   A. Server dengan source repo (build lokal):
+#        cp .env.example .env      # isi nilai asli
+#        docker compose -f docker-compose.prod.yml up -d --build
+# Nama kontainer sengaja TIDAK di-pin (`container_name`) supaya
+# `docker compose up -d --scale web=3` bisa jalan — container_name membuat
+# replika kedua gagal dengan "container name is already in use". Gunakan
+# `docker compose -f docker-compose.prod.yml logs -f web` dsb. untuk operasi.
+#
+#   B. Server tanpa source repo (image hasil CI dari registry):
+#        docker compose -f docker-compose.prod.yml pull
+#        docker compose -f docker-compose.prod.yml up -d
+#      `web`   → ${ANICHIN_IMAGE:-anichin/anichin:prod-current}
+#      `migrate` → ${ANICHIN_MIGRATE_IMAGE:-anichin/anichin:prod-migrate}
+#
+# Deploy Production (.github/workflows/deploy.yml) memakai jalur B dan
+# menyiapkan file yang dibutuhkan di /opt/anichin-<environment>.
 # ============================================================================
 
 services:
@@ -13,7 +27,6 @@ services:
   # ─────────────────────────────────────────────────────────────
   db:
     image: postgres:16-alpine
-    container_name: anichin-db
     restart: unless-stopped
     environment:
       - POSTGRES_DB=anichin
@@ -21,6 +34,15 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       # Performance tuning (adjust based on host RAM)
       - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --locale=C.UTF-8
+    # Catatan: WAL archiving (`wal_level=replica` + `archive_mode=on` +
+    # `archive_command` ke bind mount ./backups/wal) DIHAPUS. Direktori bind
+    # mount dibuat Docker sebagai root, sedangkan PostgreSQL berjalan sebagai
+    # uid 70 — `archive_command` selalu gagal, dan saat archive_mode aktif
+    # PostgreSQL menahan WAL di pg_wal sampai berhasil diarsipkan. Artinya
+    # disk host bisa penuh lalu database berhenti menerima tulisan. Tidak ada
+    # skrip mana pun di repo ini yang membaca arsip WAL tersebut (restore
+    # memakai pg_restore dari dump di ./backups), jadi arsip itu murni risiko.
+    # Backup resmi: service `backup-cron` (pg_dump harian, retensi 14 hari).
     command:
       - "postgres"
       - "-c" 
@@ -39,17 +61,10 @@ services:
       - "log_connections=on"
       - "-c"
       - "log_disconnections=on"
-      - "-c"
-      - "wal_level=replica"
-      - "-c"
-      - "archive_mode=on"
-      - "-c"
-      - "archive_command=test ! -f /var/lib/postgresql/wal-archive/%f && cp %p /var/lib/postgresql/wal-archive/%f"
     ports:
       - "127.0.0.1:5432:5432"  # Only bind to localhost — never expose publicly
     volumes:
       - db_data:/var/lib/postgresql/data
-      - ./backups/wal:/var/lib/postgresql/wal-archive
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U anichin -d anichin"]
       interval: 10s
@@ -69,7 +84,6 @@ services:
   # ─────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
-    container_name: anichin-redis
     restart: unless-stopped
     command:
       - "redis-server"
@@ -111,7 +125,12 @@ services:
       target: migrate
       args:
         DATABASE_PROVIDER: postgresql
-    container_name: anichin-migrate
+    # Image yang dipakai/di-pull. Nama eksplisit ini penting:
+    #  • `docker compose pull` hanya menarik image yang punya nama — sebelumnya
+    #    service ini murni `build:`, jadi pull tidak menarik apa pun.
+    #  • `docker build --target migrate -t <nama>` dari CI memakai tag yang sama,
+    #    sehingga server tanpa source repo tetap bisa menjalankan migrasi.
+    image: ${ANICHIN_MIGRATE_IMAGE:-anichin/anichin:prod-migrate}
     restart: "no"
     command: ["bunx", "prisma", "migrate", "deploy"]
     env_file:
@@ -135,8 +154,20 @@ services:
       target: runner
       args:
         DATABASE_PROVIDER: postgresql
-    container_name: anichin-web
+        # NEXT_PUBLIC_* di-inline saat build (tidak bisa ditimpa runtime).
+        # Boleh dikosongkan: src/lib/site.ts jatuh ke NEXTAUTH_URL (server) /
+        # DEFAULT_SITE_URL (bundle browser). Isi bila domain publik berbeda
+        # dari NEXTAUTH_URL, mis. deploy di domain lain.
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-}
+        # Versi cache service worker; kosong = fallback timestamp build.
+        NEXT_PUBLIC_BUILD_ID: ${NEXT_PUBLIC_BUILD_ID:-}
+    # Sama seperti `migrate`: nama image eksplisit supaya (1) `docker compose
+    # pull` benar-benar menarik image hasil build CI, (2) `docker tag <rollback>
+    # prod-current` yang dilakukan pipeline rollback benar-benar berpengaruh.
+    image: ${ANICHIN_IMAGE:-anichin/anichin:prod-current}
     restart: unless-stopped
+    # Beri waktu request berjalan selesai (SIGTERM → drain) saat redeploy.
+    stop_grace_period: 30s
     ports:
       - "127.0.0.1:3000:3000"  # Local only — caddy handles public TLS
     env_file:
@@ -158,7 +189,14 @@ services:
       migrate:
         condition: service_completed_successfully
     volumes:
-      - ./logs:/app/logs
+      # Named volume, BUKAN bind mount ./logs:/app/logs: bind mount mewarisi
+      # kepemilikan direktori host (root), sedangkan proses berjalan sebagai
+      # uid 1001 — audit-log gagal menulis secara diam-diam (`catch {}` di
+      # src/lib/audit-log.ts). Volume baru diinisialisasi dari isi image,
+      # jadi /app/logs tetap milik nextjs:nodejs.
+      # Baca log: docker compose -f docker-compose.prod.yml exec web \
+      #             tail -f /app/logs/audit.jsonl
+      - logs_data:/app/logs
     networks:
       - anichin-network
     healthcheck:
@@ -179,7 +217,6 @@ services:
   # ─────────────────────────────────────────────────────────────
   backup-cron:
     image: postgres:16-alpine
-    container_name: anichin-backup
     restart: unless-stopped
     environment:
       - PGHOST=db
@@ -200,6 +237,11 @@ services:
     volumes:
       - ./backups:/backups
       - ./scripts/backup-db.sh:/usr/local/bin/backup.sh:ro
+      # restore-db.sh juga di-mount: prosedur restore di docs/DEPLOYMENT.md
+      # menjalankannya DI DALAM container ini (`docker compose exec backup
+      # /usr/local/bin/restore-db.sh <nama>`), dan tanpa mount ini perintahnya
+      # gagal "not found" — baru ketahuan saat benar-benar butuh restore.
+      - ./scripts/restore-db.sh:/usr/local/bin/restore-db.sh:ro
     depends_on:
       db:
         condition: service_healthy
@@ -216,7 +258,6 @@ services:
   # ─────────────────────────────────────────────────────────────
   caddy:
     image: caddy:2-alpine
-    container_name: anichin-caddy
     restart: unless-stopped
     ports:
       - "80:80"
@@ -246,6 +287,8 @@ volumes:
   db_data:
     driver: local
   redis_data:
+    driver: local
+  logs_data:
     driver: local
   caddy_data:
     driver: local

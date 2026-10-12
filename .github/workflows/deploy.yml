@@ -1,7 +1,27 @@
 # ============================================================================
 # AniChin — Production Deploy Pipeline
 # Triggered: push to main, manual dispatch
-# Features: build → push image → migrate DB → deploy → health check → rollback on fail
+# Features: build → push image → bootstrap server → deploy → health check →
+#           rollback on fail
+#
+# Alur deploy (ringkas):
+#   1. 🧭 Preflight      — deteksi secret yang tersedia (tanpa ini `secrets`
+#                          tidak bisa dibaca di `jobs.<id>.if`).
+#   2. 🔍 Validate       — NEXTAUTH_SECRET/NEXTAUTH_URL wajib; provider OAuth
+#                          opsional hanya memunculkan warning.
+#   3. 🐳 Build & push   — DUA target image:
+#                            web     → <registry>/anichin:prod-current
+#                            migrate → <registry>/anichin:prod-migrate
+#                          Nama image ini sama dengan yang dipakai
+#                          docker-compose.prod.yml, sehingga `docker compose pull`
+#                          di server benar-benar menarik image hasil CI dan
+#                          rollback (tag ulang image lama) punya efek.
+#   4. 📤 Bootstrap      — kirim docker-compose.prod.yml + Caddyfile + scripts
+#                          ke /opt/anichin-<env>, lalu tulis/perbarui .env dari
+#                          secret (lihat scripts/deploy-env.sh).
+#   5. 🚀 Deploy         — scripts/compose-deploy.sh: pull → up → tunggu migrasi
+#                          → health check → rollback otomatis bila gagal.
+#   6. 🧪 Smoke test     — cek endpoint publik dari runner.
 #
 # Catatan perilaku: kalau `DEPLOY_HOST` belum diset, job `deploy` DI-SKIP dan
 # run tetap hijau — tetapi job `preflight` selalu menuliskan annotation yang
@@ -10,6 +30,11 @@
 # eksplisit untuk deploy tidak boleh berakhir no-op). Untuk sengaja menjalankan
 # build-only, set repository variable `BUILD_ONLY=true`
 # (Settings → Secrets and variables → Actions → Variables).
+#
+# Prasyarat di server (sekali saja, lihat docs/DEPLOYMENT.md):
+#   • Docker + plugin `docker compose` v2
+#   • user deploy bisa menjalankan docker
+#   • `docker login <registry>` bila registry-nya privat
 # ============================================================================
 name: Deploy Production
 
@@ -92,6 +117,9 @@ jobs:
           # Alasan selalu ditulis eksplisit sebagai annotation.
           if [ -n "$DEPLOY_HOST" ]; then
             echo "✅ DEPLOY_HOST terkonfigurasi — build → push → deploy → smoke test akan berjalan."
+            if [ -z "$REGISTRY" ]; then
+              echo "::warning title=Registry belum diset::REGISTRY kosong, jadi image hanya di-build (push=false) dan server harus punya source repo untuk build lokal. Langkah deploy tetap dijalankan dengan SKIP_PULL=1."
+            fi
           elif [ "$BUILD_ONLY" = "true" ]; then
             echo "::notice title=Mode build-only::BUILD_ONLY=true — image di-build (dan di-push bila REGISTRY diset); langkah SSH deploy + smoke test dilewati."
           else
@@ -102,6 +130,11 @@ jobs:
       # Push ke main tanpa konfigurasi hanya di-skip (lihat warning di atas),
       # tetapi menjalankan workflow ini manual adalah niat eksplisit untuk
       # deploy/rollback — tidak boleh berakhir diam-diam tanpa apa pun.
+      #
+      # Sebelumnya guard ini juga aktif untuk push ke main, sehingga SETIAP
+      # push ke main SELALU merah selama secret deploy belum diisi — padahal
+      # job `deploy` sudah di-skip dengan alasan yang jelas. Sekarang guard
+      # hanya berlaku untuk pemanggilan manual (workflow_dispatch).
       - name: ❌ Guard — workflow_dispatch tanpa target deploy
         if: github.event_name == 'workflow_dispatch' && steps.detect.outputs.proceed != 'true'
         run: |
@@ -112,7 +145,7 @@ jobs:
   deploy:
     name: 🚀 Deploy to ${{ github.event.inputs.environment || 'production' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     needs: preflight
     # Di-skip (bukan gagal) bila repo belum punya target deploy dan BUILD_ONLY
     # tidak diset — push ke main tidak lagi merah hanya karena belum ada server.
@@ -122,24 +155,44 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      # ── Pre-deploy: validate OAuth secrets are set ──────────
-      - name: 🔍 Validate OAuth configuration
+      - name: 🧭 Resolve deploy settings
+        id: cfg
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
+          REGISTRY: ${{ secrets.REGISTRY }}
+        run: |
+          set -euo pipefail
+          # Direktori di server (dibuat otomatis oleh langkah Bootstrap).
+          #   production → /opt/anichin-production
+          #   staging    → /opt/anichin-staging
+          echo "app_dir=/opt/anichin-${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
+          # Nama image harus sama dengan default di docker-compose.prod.yml.
+          if [ -n "$REGISTRY" ]; then
+            echo "web_image=${REGISTRY}/anichin:prod-current" >> "$GITHUB_OUTPUT"
+            echo "migrate_image=${REGISTRY}/anichin:prod-migrate" >> "$GITHUB_OUTPUT"
+          else
+            echo "web_image=anichin/anichin:prod-current" >> "$GITHUB_OUTPUT"
+            echo "migrate_image=anichin/anichin:prod-migrate" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Pre-deploy: validate required config ────────────────
+      - name: 🔍 Validate deployment configuration
         if: github.event.inputs.rollback != 'true' && needs.preflight.outputs.deploy == 'true'
         env:
           NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
           NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          TWO_FACTOR_ENCRYPTION_KEY: ${{ secrets.TWO_FACTOR_ENCRYPTION_KEY }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GITHUB_CLIENT_ID: ${{ secrets.OAUTH_GITHUB_CLIENT_ID }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}
+          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID || secrets.OAUTH_GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET || secrets.OAUTH_GITHUB_CLIENT_SECRET }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
         run: |
           set -euo pipefail
-          echo "Verifying required OAuth env vars..."
           MISSING=()
           [ -z "$NEXTAUTH_SECRET" ] && MISSING+=("NEXTAUTH_SECRET")
           [ -z "$NEXTAUTH_URL" ] && MISSING+=("NEXTAUTH_URL")
-          [ -z "$GOOGLE_CLIENT_ID" ] && MISSING+=("GOOGLE_CLIENT_ID")
-          [ -z "$GOOGLE_CLIENT_SECRET" ] && MISSING+=("GOOGLE_CLIENT_SECRET")
 
           if [ ${#MISSING[@]} -gt 0 ]; then
             echo "::error::Missing required GitHub Secrets: ${MISSING[*]}"
@@ -149,38 +202,56 @@ jobs:
             exit 1
           fi
 
-          # GitHub OAuth is optional (the app simply hides the button without it)
-          if [ -z "$GITHUB_CLIENT_ID" ] || [ -z "$GITHUB_CLIENT_SECRET" ]; then
-            echo "::warning::OAUTH_GITHUB_CLIENT_ID / OAUTH_GITHUB_CLIENT_SECRET not set - GitHub login will be disabled"
+          # POSTGRES_PASSWORD tidak dipaksa di sini: docker compose membacanya
+          # dari .env di direktori deploy (${POSTGRES_PASSWORD:?...}), jadi
+          # server yang sudah punya .env tetap bisa deploy tanpa secret ini.
+          if [ -z "$POSTGRES_PASSWORD" ]; then
+            echo "::notice title=POSTGRES_PASSWORD tidak diset::Secret POSTGRES_PASSWORD kosong — memakai nilai yang sudah ada di .env server. Kalau .env belum ada, compose akan gagal start dengan 'POSTGRES_PASSWORD is required'."
           fi
 
-          # Validate NEXTAUTH_URL is HTTPS in production
-          if [[ ! "$NEXTAUTH_URL" =~ ^https:// ]]; then
-            echo "::error::NEXTAUTH_URL must use HTTPS in production (got: $NEXTAUTH_URL)"
-            exit 1
-          fi
-
-          # Validate NEXTAUTH_SECRET length
+          # NEXTAUTH_SECRET harus kuat (app menolak <16, dokumentasi menyarankan ≥32).
           if [ ${#NEXTAUTH_SECRET} -lt 32 ]; then
             echo "::error::NEXTAUTH_SECRET too short (${#NEXTAUTH_SECRET} chars, need ≥32)"
             echo "Generate with: openssl rand -base64 32"
             exit 1
           fi
 
-          # Validate Google OAuth format
-          if [[ ! "$GOOGLE_CLIENT_ID" =~ \.apps\.googleusercontent\.com$ ]]; then
-            echo "::warning::GOOGLE_CLIENT_ID format unusual (expected to end with .apps.googleusercontent.com)"
-          fi
-          if [[ ! "$GOOGLE_CLIENT_SECRET" =~ ^GOCSPX- ]]; then
-            echo "::warning::GOOGLE_CLIENT_SECRET format unusual (expected to start with GOCSPX-)"
+          # NEXTAUTH_URL wajib HTTPS di produksi (cookie Secure + OAuth redirect).
+          if [[ ! "$NEXTAUTH_URL" =~ ^https:// ]]; then
+            echo "::error::NEXTAUTH_URL must use HTTPS in production (got: $NEXTAUTH_URL)"
+            exit 1
           fi
 
-          echo "✅ All required OAuth env vars are set"
+          # Provider OAuth OPSIONAL: aplikasi hanya menampilkan tombol yang
+          # env-nya terisi (src/lib/auth.ts). Sebelumnya Google dipaksa wajib,
+          # sehingga deploy gagal hanya karena login Google belum diisi.
+          if [ -z "$GOOGLE_CLIENT_ID" ] || [ -z "$GOOGLE_CLIENT_SECRET" ]; then
+            echo "::warning title=Google OAuth tidak aktif::GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET kosong — tombol login Google disembunyikan."
+          fi
+          if [ -z "$GITHUB_CLIENT_ID" ] || [ -z "$GITHUB_CLIENT_SECRET" ]; then
+            echo "::warning title=GitHub OAuth tidak aktif::GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET kosong — tombol login GitHub disembunyikan."
+          fi
+          if [ -z "$TWO_FACTOR_ENCRYPTION_KEY" ]; then
+            echo "::warning title=2FA tidak dikonfigurasi::TWO_FACTOR_ENCRYPTION_KEY kosong — pengguna yang mengaktifkan 2FA akan gagal (src/lib/two-factor.ts menolak tanpa kunci ini di produksi)."
+          fi
+          if [ -z "$SMTP_HOST" ]; then
+            echo "::notice title=SMTP belum diset::SMTP_HOST kosong — verifikasi email & reset password tidak akan mengirim email."
+          fi
+
+          echo "✅ Konfigurasi wajib lengkap"
           echo "  NEXTAUTH_URL: $NEXTAUTH_URL"
           echo "  NEXTAUTH_SECRET: [${#NEXTAUTH_SECRET} chars]"
-          echo "  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:0:30}..."
 
-      # ── Rollback path ─────────────────────────────────────
+      # Rollback manual saat DEPLOY_HOST belum diisi → job akan "sukses" tanpa
+      # melakukan apa pun (semua langkah lain di-skip). Itu hijau palsu, jadi
+      # dibuat gagal keras.
+      - name: ❌ Guard — rollback manual tanpa target
+        if: github.event.inputs.rollback == 'true' && needs.preflight.outputs.deploy != 'true'
+        run: |
+          echo "::error title=Rollback tidak dikonfigurasi::Rollback diminta, tetapi DEPLOY_HOST kosong — tidak ada server yang bisa di-rollback. Isi secret DEPLOY_HOST/DEPLOY_USER/DEPLOY_SSH_KEY."
+          exit 1
+
+      # ── Rollback path (manual dispatch) ────────────────────
       - name: 🔄 Rollback to previous version
         if: github.event.inputs.rollback == 'true' && needs.preflight.outputs.deploy == 'true'
         env:
@@ -188,48 +259,33 @@ jobs:
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
+          APP_DIR: ${{ steps.cfg.outputs.app_dir }}
+          # Dilewatkan ke skrip di server; nama image harus sama seperti saat
+          # deploy supaya tag rollback yang dicari tepat.
+          ANICHIN_IMAGE: ${{ steps.cfg.outputs.web_image }}
+          ANICHIN_MIGRATE_IMAGE: ${{ steps.cfg.outputs.migrate_image }}
         run: |
-          mkdir -p ~/.ssh
-          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H $DEPLOY_HOST >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            "$DEPLOY_USER@$DEPLOY_HOST" "ENVIRONMENT=$ENVIRONMENT bash -s" << 'EOF'
-            cd /opt/anichin-${ENVIRONMENT:-production}
-            # Find the most recent rollback image
-            ROLLBACK_TAG=$(docker images --format "{{.Tag}}" anichin/anichin | grep -E "^prod-rollback-" | sort -r | head -1)
-            if [ -z "$ROLLBACK_TAG" ]; then
-              echo "::error::No rollback image found"
-              exit 1
-            fi
-            echo "Rolling back to: $ROLLBACK_TAG"
-            docker tag anichin/anichin:$ROLLBACK_TAG anichin/anichin:prod-current
-            docker-compose -f docker-compose.prod.yml up -d --remove-orphans
-            sleep 15
-            curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"' || exit 1
-            echo "✓ Rollback successful"
-          EOF
-          exit 0
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "APP_DIR='$APP_DIR' ENVIRONMENT='$ENVIRONMENT' ROLLBACK_ONLY=1 ANICHIN_IMAGE='$ANICHIN_IMAGE' ANICHIN_MIGRATE_IMAGE='$ANICHIN_MIGRATE_IMAGE' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$APP_DIR"
+          if [ ! -x ./scripts/compose-deploy.sh ]; then
+            echo "::error::$APP_DIR/scripts/compose-deploy.sh tidak ada — jalankan Deploy Production (tanpa rollback) sekali dulu, langkah '📤 Upload deploy files' yang mengirim skrip ini."
+            exit 1
+          fi
+          # Skrip ini juga dipakai jalur deploy normal; mode ROLLBACK_ONLY hanya
+          # mengembalikan tag rollback terbaru lalu menjalankan ulang stack.
+          NO_PULL=1 ./scripts/compose-deploy.sh
+          REMOTE
 
       # ── Normal deploy path ─────────────────────────────────
-      - name: Setup Bun
-        if: github.event.inputs.rollback != 'true'
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: latest
-
-      - name: Install dependencies
-        if: github.event.inputs.rollback != 'true'
-        run: bun install --frozen-lockfile
-
-      - name: Generate Prisma client (PostgreSQL)
-        if: github.event.inputs.rollback != 'true'
-        # schema.prisma is already provider="postgresql" — no swap needed.
-        run: bun run db:generate
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://anichin:anichin@localhost:5432/anichin?schema=public' }}
-
       - name: Set up Docker Buildx
         if: github.event.inputs.rollback != 'true'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
@@ -242,108 +298,217 @@ jobs:
           username: ${{ secrets.REGISTRY_USER }}
           password: ${{ secrets.REGISTRY_PASS }}
 
-      - name: Build & push production image
+      # Image `web` (runner): Next.js standalone — yang melayani trafik.
+      # Catatan: langkah `bun install` + `prisma generate` di runner CI DIHAPUS.
+      # Keduanya hanya menyiapkan artefak yang tidak dipakai: seluruh dependency
+      # dan Prisma client dihasilkan di dalam image (stage deps/builder), jadi
+      # langkah itu hanya menambah ~1 menit dan satu titik gagal.
+      #
+      # `provenance: false`: buildx menambahkan manifest attestation
+      # ("unknown/unknown") pada image yang di-push; Docker di server lama
+      # (<= 24) menolak pull manifest seperti itu → deploy gagal saat
+      # `docker compose pull`. Dinonaktifkan supaya image bisa di-pull di semua
+      # versi Docker yang didukung docs/DEPLOYMENT.md.
+      - name: Build & push image web (Next.js standalone)
         if: github.event.inputs.rollback != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: ./Dockerfile
+          target: runner
           push: ${{ needs.preflight.outputs.registry == 'true' }}
+          provenance: false
           tags: |
             ${{ secrets.REGISTRY || 'anichin' }}/anichin:prod-${{ github.sha }}
             ${{ secrets.REGISTRY || 'anichin' }}/anichin:prod-latest
             ${{ secrets.REGISTRY || 'anichin' }}/anichin:prod-current
           build-args: |
             DATABASE_PROVIDER=postgresql
-          # Registry cache needs push access -> only when a registry is configured
+            NEXT_PUBLIC_SITE_URL=${{ secrets.NEXTAUTH_URL }}
+            NEXT_PUBLIC_BUILD_ID=${{ github.sha }}
           cache-from: ${{ needs.preflight.outputs.registry == 'true' && format('type=registry,ref={0}/anichin:buildcache', secrets.REGISTRY) || '' }}
           cache-to: ${{ needs.preflight.outputs.registry == 'true' && format('type=registry,ref={0}/anichin:buildcache,mode=max', secrets.REGISTRY) || '' }}
 
-      - name: Deploy via SSH (Docker Compose)
-        if: github.event.inputs.rollback != 'true' && needs.preflight.outputs.deploy == 'true'
+      # Image `migrate`: stage dengan bun + Prisma CLI, dipakai service one-shot
+      # `migrate` di docker-compose.prod.yml. Tanpa image ini, server tanpa
+      # source repo tidak bisa menjalankan `prisma migrate deploy`.
+      - name: Build & push image migrate (Prisma CLI)
+        if: github.event.inputs.rollback != 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: migrate
+          push: ${{ needs.preflight.outputs.registry == 'true' }}
+          provenance: false
+          tags: |
+            ${{ secrets.REGISTRY || 'anichin' }}/anichin:prod-migrate-${{ github.sha }}
+            ${{ secrets.REGISTRY || 'anichin' }}/anichin:prod-migrate
+          build-args: |
+            DATABASE_PROVIDER=postgresql
+          cache-from: ${{ needs.preflight.outputs.registry == 'true' && format('type=registry,ref={0}/anichin:buildcache-migrate', secrets.REGISTRY) || '' }}
+          cache-to: ${{ needs.preflight.outputs.registry == 'true' && format('type=registry,ref={0}/anichin:buildcache-migrate,mode=max', secrets.REGISTRY) || '' }}
+
+      - name: 📤 Upload deploy files to server
+        if: success() && github.event.inputs.rollback != 'true' && needs.preflight.outputs.deploy == 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          APP_DIR: ${{ steps.cfg.outputs.app_dir }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          # Bundle = file yang perlu ada di server. Source aplikasi TIDAK
+          # dikirim: image sudah berisi semuanya, dan config dikirim dari commit
+          # yang sedang di-deploy supaya tidak pernah berbeda dari image.
+          mkdir -p deploy-bundle/scripts
+          cp docker-compose.prod.yml Caddyfile deploy-bundle/
+          cp scripts/compose-deploy.sh scripts/deploy-env.sh scripts/backup-db.sh scripts/restore-db.sh deploy-bundle/scripts/
+          chmod +x deploy-bundle/scripts/*.sh
+
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$APP_DIR/scripts' '$APP_DIR/backups'"
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -q \
+            deploy-bundle/docker-compose.prod.yml deploy-bundle/Caddyfile \
+            "$DEPLOY_USER@$DEPLOY_HOST:$APP_DIR/"
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -q \
+            deploy-bundle/scripts/*.sh "$DEPLOY_USER@$DEPLOY_HOST:$APP_DIR/scripts/"
+          echo "✓ File deploy terkirim ke $APP_DIR"
+
+      - name: ⚙️ Bootstrap .env di server (tanpa menimpa setelan manual)
+        if: success() && github.event.inputs.rollback != 'true' && needs.preflight.outputs.deploy == 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          APP_DIR: ${{ steps.cfg.outputs.app_dir }}
+          # Secret dikirim lewat STDIN (heredoc), bukan argv → tidak terlihat
+          # di `ps` server dan di-mask GitHub pada log.
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
+          NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
+          NEXT_PUBLIC_SITE_URL: ${{ secrets.NEXT_PUBLIC_SITE_URL }}
+          SITE_DOMAIN: ${{ secrets.SITE_DOMAIN }}
+          TWO_FACTOR_ENCRYPTION_KEY: ${{ secrets.TWO_FACTOR_ENCRYPTION_KEY }}
+          IP_HASH_SALT: ${{ secrets.IP_HASH_SALT }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID || secrets.OAUTH_GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET || secrets.OAUTH_GITHUB_CLIENT_SECRET }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_SECURE: ${{ secrets.SMTP_SECURE }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          ANICHIN_IMAGE: ${{ steps.cfg.outputs.web_image }}
+          ANICHIN_MIGRATE_IMAGE: ${{ steps.cfg.outputs.migrate_image }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          # SITE_DOMAIN untuk Caddy: pakai secret bila ada, kalau tidak
+          # diturunkan dari host NEXTAUTH_URL (dipakai di domain + www).
+          if [ -z "${SITE_DOMAIN:-}" ]; then
+            SITE_DOMAIN="${NEXTAUTH_URL#*://}"
+            SITE_DOMAIN="${SITE_DOMAIN%%/*}"
+          fi
+
+          # Heredoc TANPA kutip (berbeda dari langkah deploy) adalah pilihan
+          # sadar: variabel harus diekspansi di RUNNER (di situlah secret
+          # berada), lalu nilainya dikirim sebagai stdin ssh. Skrip di server
+          # membaca KEY=VALUE dari stdin dan tidak pernah mencetak nilainya.
+          # shellcheck disable=SC2087
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd '$APP_DIR' && ENV_FILE='$APP_DIR/.env' ./scripts/deploy-env.sh" <<EOF
+          POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+          NEXTAUTH_SECRET=$NEXTAUTH_SECRET
+          NEXTAUTH_URL=$NEXTAUTH_URL
+          NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
+          SITE_DOMAIN=$SITE_DOMAIN
+          TWO_FACTOR_ENCRYPTION_KEY=$TWO_FACTOR_ENCRYPTION_KEY
+          IP_HASH_SALT=$IP_HASH_SALT
+          GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
+          GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET
+          GITHUB_CLIENT_ID=$GITHUB_CLIENT_ID
+          GITHUB_CLIENT_SECRET=$GITHUB_CLIENT_SECRET
+          SMTP_HOST=$SMTP_HOST
+          SMTP_PORT=$SMTP_PORT
+          SMTP_SECURE=$SMTP_SECURE
+          SMTP_USER=$SMTP_USER
+          SMTP_PASS=$SMTP_PASS
+          SMTP_FROM=$SMTP_FROM
+          ANICHIN_IMAGE=$ANICHIN_IMAGE
+          ANICHIN_MIGRATE_IMAGE=$ANICHIN_MIGRATE_IMAGE
+          EOF
+
+      - name: 🚀 Deploy via Docker Compose (pull → migrate → health → rollback)
+        if: success() && github.event.inputs.rollback != 'true' && needs.preflight.outputs.deploy == 'true'
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
-          NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          APP_DIR: ${{ steps.cfg.outputs.app_dir }}
+          ANICHIN_IMAGE: ${{ steps.cfg.outputs.web_image }}
+          ANICHIN_MIGRATE_IMAGE: ${{ steps.cfg.outputs.migrate_image }}
+          # Tanpa registry, image tidak ada di mana pun: server harus punya
+          # source repo + Dockerfile untuk build lokal.
+          SKIP_PULL: ${{ needs.preflight.outputs.registry == 'true' && '0' || '1' }}
         run: |
           set -euo pipefail
-          mkdir -p ~/.ssh
-          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H $DEPLOY_HOST >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-          # Pre-deploy backup
-          echo "📦 Creating pre-deploy DB backup..."
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            "$DEPLOY_USER@$DEPLOY_HOST" "ENVIRONMENT=$ENVIRONMENT bash -s" << 'EOF'
-            cd /opt/anichin-${ENVIRONMENT:-production}
-            ./scripts/backup-db.sh pre-deploy-$(date +%Y%m%d-%H%M%S) || echo "Backup failed (continuing)"
-          EOF
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "APP_DIR='$APP_DIR' ENVIRONMENT='$ENVIRONMENT' SKIP_PULL='$SKIP_PULL' ANICHIN_IMAGE='$ANICHIN_IMAGE' ANICHIN_MIGRATE_IMAGE='$ANICHIN_MIGRATE_IMAGE' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$APP_DIR"
 
-          # Tag current image as rollback target
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            "$DEPLOY_USER@$DEPLOY_HOST" "ENVIRONMENT=$ENVIRONMENT bash -s" << 'EOF'
-            docker tag anichin/anichin:prod-current anichin/anichin:prod-rollback-$(date +%s) 2>/dev/null || true
-          EOF
+          # Validasi Caddyfile lebih dulu: direktif/matcher yang salah membuat
+          # container caddy gagal start (situs mati total), dan lebih murah
+          # ketahuan sekarang daripada setelah `up -d`.
+          if [ -x ./scripts/compose-deploy.sh ]; then :; else chmod +x ./scripts/*.sh; fi
 
-          # Deploy & health check
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            "$DEPLOY_USER@$DEPLOY_HOST" "ENVIRONMENT=$ENVIRONMENT bash -s" << 'EOF'
-            set -euo pipefail
-            cd /opt/anichin-${ENVIRONMENT:-production}
-            docker-compose -f docker-compose.prod.yml pull
-            docker-compose -f docker-compose.prod.yml up -d --remove-orphans
+          # SITE_DOMAIN diambil dari .env server (diisi langkah Bootstrap) supaya
+          # yang divalidasi benar-benar konfigurasi yang akan dipakai.
+          SITE_DOMAIN="$(sed -n 's/^SITE_DOMAIN=//p' .env 2>/dev/null | tail -n 1 | sed 's/^"//; s/"$//')"
+          echo "▶ Validasi Caddyfile (SITE_DOMAIN=${SITE_DOMAIN:-<kosong>})…"
+          # ENTRYPOINT image caddy adalah `caddy`, jadi argumen pertama = subcommand.
+          docker run --rm -e "SITE_DOMAIN=${SITE_DOMAIN:-example.com}" \
+            -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
-            # Wait for migrate service to complete
-            echo "⏳ Waiting for migrations..."
-            timeout 120 docker-compose -f docker-compose.prod.yml run --rm migrate bunx prisma migrate deploy || true
+          ./scripts/compose-deploy.sh
+          REMOTE
 
-            # Health check with retries
-            echo "🏥 Health check..."
-            sleep 20
-            for i in 1 2 3 4 5 6; do
-              if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
-                echo "✅ Deploy successful — health check passed"
-                exit 0
-              fi
-              echo "Waiting for health... ($i/6)"
-              sleep 10
-            done
-
-            # Health check failed — initiate rollback
-            echo "❌ Health check failed — initiating automatic rollback"
-            ROLLBACK_TAG=$(docker images --format "{{.Tag}}" anichin/anichin | grep -E "^prod-rollback-" | sort -r | head -1)
-            if [ -z "$ROLLBACK_TAG" ]; then
-              echo "❌ No rollback image available — manual intervention required"
-              exit 1
-            fi
-            echo "Rolling back to: $ROLLBACK_TAG"
-            docker tag anichin/anichin:$ROLLBACK_TAG anichin/anichin:prod-current
-            docker-compose -f docker-compose.prod.yml up -d --remove-orphans
-            sleep 15
-            curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"' && echo "✅ Rollback successful" || exit 1
-          EOF
-
-      - name: Run smoke tests
-        if: github.event.inputs.rollback != 'true' && needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.smoke == 'true'
+      - name: 🧪 Smoke tests (endpoint publik)
+        if: success() && github.event.inputs.rollback != 'true' && needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.smoke == 'true'
         env:
           NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
         run: |
           set -euo pipefail
-          # Health endpoint
+          # Endpoint kesehatan
           curl -sf "$NEXTAUTH_URL/api/health" | grep -q '"status":"ok"'
           echo "✓ Health endpoint OK"
 
-          # Auth providers
+          # Auth providers (credentials selalu ada)
           curl -sf "$NEXTAUTH_URL/api/auth/providers" | grep -q '"credentials"'
           echo "✓ Auth endpoint OK"
 
-          # Static pages
+          # Halaman statis + manifest PWA
           curl -sf -o /dev/null -w "Home: %{http_code}\n" "$NEXTAUTH_URL/"
           curl -sf -o /dev/null -w "Login: %{http_code}\n" "$NEXTAUTH_URL/auth/login"
           curl -sf -o /dev/null -w "Manifest: %{http_code}\n" "$NEXTAUTH_URL/manifest.webmanifest"
@@ -352,10 +517,15 @@ jobs:
       - name: Notify Slack on failure
         if: failure() && needs.preflight.outputs.slack == 'true'
         env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
           ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
         uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
         with:
+          # `webhook` + `webhook-type` WAJIB: action v4 hanya membaca
+          # process.env.SLACK_WEBHOOK_URL kalau input `webhook` kosong, dan
+          # menolak jalan tanpa `webhook-type` — sebelumnya kedua input ini
+          # tidak diisi sehingga notifikasi tidak pernah terkirim.
+          webhook: ${{ secrets.SLACK_WEBHOOK }}
+          webhook-type: incoming-webhook
           payload: |
             {
               "text": "🚨 AniChin ${{ env.ENVIRONMENT }} deploy failed!\nRepo: ${{ github.repository }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\nCommit: ${{ github.event.head_commit.message }}",
@@ -366,10 +536,11 @@ jobs:
       - name: Notify Slack on success
         if: success() && needs.preflight.outputs.slack == 'true'
         env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
           ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
         uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
         with:
+          webhook: ${{ secrets.SLACK_WEBHOOK }}
+          webhook-type: incoming-webhook
           payload: |
             {
               "text": "✅ AniChin ${{ env.ENVIRONMENT }} deploy successful!\nCommit: ${{ github.event.head_commit.id }}\nAuthor: ${{ github.event.head_commit.author.name }}",

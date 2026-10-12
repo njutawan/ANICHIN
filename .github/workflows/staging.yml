@@ -2,6 +2,13 @@
 # AniChin — Staging Deploy Pipeline
 # Auto-deploys develop branch to staging environment
 # Manual trigger: workflow_dispatch
+#
+# Staging memakai skrip yang SAMA dengan produksi
+# (scripts/compose-deploy.sh) supaya perilakunya konsisten: pull → up →
+# tunggu migrasi → health check → rollback. Sebelumnya workflow ini memeriksa
+# `http://localhost:3000/api/health` padahal container staging dipublikasikan
+# di 127.0.0.1:3001, sehingga staging SELALU "gagal health check" dan
+# di-rollback ke tag image yang tidak pernah dibuat.
 # ============================================================================
 name: Deploy Staging
 
@@ -22,7 +29,7 @@ jobs:
   deploy-staging:
     name: 🚀 Deploy to Staging
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment:
       name: staging
     steps:
@@ -44,19 +51,9 @@ jobs:
             flag slack    "$SLACK_WEBHOOK"
           } | tee -a "$GITHUB_OUTPUT"
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Generate Prisma client (PostgreSQL)
-        # schema.prisma is already provider="postgresql" — no swap needed.
-        run: bun run db:generate
-        env:
-          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL || 'postgresql://anichin:anichin@localhost:5432/anichin?schema=public' }}
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "::warning title=Staging dilewati::STAGING_DEPLOY_HOST kosong — image tetap di-build, tetapi tidak ada server yang di-deploy."
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
@@ -69,61 +66,138 @@ jobs:
           username: ${{ secrets.REGISTRY_USER }}
           password: ${{ secrets.REGISTRY_PASS }}
 
-      - name: Build & push staging image
+      # Dua target image, sama seperti produksi: `web` (runner) + `migrate`
+      # (bun + Prisma CLI untuk service one-shot migrate).
+      - name: Build & push image web (runner)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: ./Dockerfile
+          target: runner
           push: ${{ steps.preflight.outputs.registry == 'true' }}
+          # Lihat catatan di deploy.yml: attestation "unknown/unknown" bikin
+          # Docker lama gagal pull.
+          provenance: false
           tags: |
             ${{ secrets.REGISTRY || 'anichin' }}/anichin:staging-${{ github.sha }}
-            ${{ secrets.REGISTRY || 'anichin' }}/anichin:staging-latest
+            ${{ secrets.REGISTRY || 'anichin' }}/anichin:staging-current
           build-args: |
             DATABASE_PROVIDER=postgresql
-          cache-from: type=registry,ref=${{ secrets.REGISTRY || 'anichin' }}/anichin:buildcache
+            NEXT_PUBLIC_SITE_URL=${{ secrets.STAGING_NEXTAUTH_URL }}
+            NEXT_PUBLIC_BUILD_ID=${{ github.sha }}
+          cache-from: ${{ steps.preflight.outputs.registry == 'true' && format('type=registry,ref={0}/anichin:buildcache-staging', secrets.REGISTRY) || '' }}
+          cache-to: ${{ steps.preflight.outputs.registry == 'true' && format('type=registry,ref={0}/anichin:buildcache-staging,mode=max', secrets.REGISTRY) || '' }}
 
-      - name: Deploy via SSH
+      - name: Build & push image migrate (Prisma CLI)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: migrate
+          push: ${{ steps.preflight.outputs.registry == 'true' }}
+          provenance: false
+          tags: |
+            ${{ secrets.REGISTRY || 'anichin' }}/anichin:staging-migrate-${{ github.sha }}
+            ${{ secrets.REGISTRY || 'anichin' }}/anichin:staging-migrate
+          build-args: |
+            DATABASE_PROVIDER=postgresql
+
+      - name: 📤 Upload compose + scripts ke server
         if: steps.preflight.outputs.deploy == 'true'
         env:
           DEPLOY_HOST: ${{ secrets.STAGING_DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.STAGING_DEPLOY_USER }}
           DEPLOY_KEY: ${{ secrets.STAGING_DEPLOY_SSH_KEY }}
+          APP_DIR: /opt/anichin-staging
         run: |
-          mkdir -p ~/.ssh
-          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H $DEPLOY_HOST >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          mkdir -p deploy-bundle/scripts
+          cp docker-compose.staging.yml deploy-bundle/
+          cp scripts/compose-deploy.sh scripts/deploy-env.sh scripts/backup-db.sh scripts/restore-db.sh deploy-bundle/scripts/
+          chmod +x deploy-bundle/scripts/*.sh
 
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            "$DEPLOY_USER@$DEPLOY_HOST" << 'EOF'
-            cd /opt/anichin-staging
-            # Backup current state for rollback
-            docker tag anichin:staging-latest anichin:staging-rollback-$(date +%s) 2>/dev/null || true
-            # Pull and restart
-            docker-compose -f docker-compose.staging.yml pull
-            docker-compose -f docker-compose.staging.yml up -d --remove-orphans
-            # Wait for health
-            sleep 15
-            for i in 1 2 3 4 5; do
-              if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
-                echo "✓ Staging deploy successful"
-                exit 0
-              fi
-              echo "Waiting for health... ($i/5)"
-              sleep 10
-            done
-            echo "✗ Health check failed — initiating rollback"
-            docker tag anichin:staging-rollback-latest anichin:staging-latest
-            docker-compose -f docker-compose.staging.yml up -d --remove-orphans
-            exit 1
+            "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$APP_DIR/scripts'"
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -q \
+            deploy-bundle/docker-compose.staging.yml "$DEPLOY_USER@$DEPLOY_HOST:$APP_DIR/"
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -q \
+            deploy-bundle/scripts/*.sh "$DEPLOY_USER@$DEPLOY_HOST:$APP_DIR/scripts/"
+
+      - name: ⚙️ Bootstrap .env staging (opsional)
+        if: steps.preflight.outputs.deploy == 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.STAGING_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.STAGING_DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.STAGING_DEPLOY_SSH_KEY }}
+          APP_DIR: /opt/anichin-staging
+          REGISTRY: ${{ secrets.REGISTRY }}
+          POSTGRES_PASSWORD: ${{ secrets.STAGING_POSTGRES_PASSWORD }}
+          NEXTAUTH_SECRET: ${{ secrets.STAGING_NEXTAUTH_SECRET }}
+          NEXTAUTH_URL: ${{ secrets.STAGING_NEXTAUTH_URL }}
+          ANICHIN_IMAGE: ${{ secrets.REGISTRY }}/anichin:staging-current
+          ANICHIN_MIGRATE_IMAGE: ${{ secrets.REGISTRY }}/anichin:staging-migrate
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          # Registry kosong → jangan tulis ANICHIN_IMAGE (biar compose memakai
+          # default-nya sendiri dan build lokal).
+          if [ -z "${REGISTRY:-}" ]; then
+            ANICHIN_IMAGE=""
+            ANICHIN_MIGRATE_IMAGE=""
+          fi
+
+          # shellcheck disable=SC2087  # ekspansi sengaja di runner (lihat deploy.yml)
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd '$APP_DIR' && ENV_FILE='$APP_DIR/.env' ./scripts/deploy-env.sh" <<EOF
+          POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+          NEXTAUTH_SECRET=$NEXTAUTH_SECRET
+          NEXTAUTH_URL=$NEXTAUTH_URL
+          ANICHIN_IMAGE=$ANICHIN_IMAGE
+          ANICHIN_MIGRATE_IMAGE=$ANICHIN_MIGRATE_IMAGE
           EOF
+
+      - name: 🚀 Deploy staging (pull → migrate → health check → rollback)
+        if: steps.preflight.outputs.deploy == 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.STAGING_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.STAGING_DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.STAGING_DEPLOY_SSH_KEY }}
+          APP_DIR: /opt/anichin-staging
+          SKIP_PULL: ${{ steps.preflight.outputs.registry == 'true' && '0' || '1' }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "APP_DIR='$APP_DIR' ENVIRONMENT='staging' COMPOSE_FILE='docker-compose.staging.yml' SKIP_PULL='$SKIP_PULL' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$APP_DIR"
+          ./scripts/compose-deploy.sh
+          REMOTE
 
       - name: Notify Slack on failure
         if: failure() && steps.preflight.outputs.slack == 'true'
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
         uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
         with:
+          # `webhook` + `webhook-type` wajib di action v4 — tanpa keduanya
+          # notifikasi tidak pernah terkirim (action membaca
+          # process.env.SLACK_WEBHOOK_URL, bukan SLACK_WEBHOOK).
+          webhook: ${{ secrets.SLACK_WEBHOOK }}
+          webhook-type: incoming-webhook
           payload: |
             {
               "text": "🚨 AniChin staging deploy failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",

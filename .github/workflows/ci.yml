@@ -333,13 +333,44 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  # ── Job 5: Docker build (verify image builds) ─────────────
+  # ── Job 5: Docker build + RUNTIME smoke test ──────────────
+  #
+  # Sebelumnya job ini hanya `docker build` lalu `ls /app/server.js`: image
+  # yang lolos belum tentu bisa MELAYANI request. Dua kelas bug lolos lewat
+  # celah itu dan baru muncul saat deploy:
+  #   1. Prisma query engine tidak ikut ke output standalone
+  #      → "Prisma Client could not locate the Query Engine for runtime ..."
+  #   2. libssl hilang di image runtime (Alpine tidak menyertakan OpenSSL)
+  #      → engine musl tidak bisa dimuat
+  # Job ini sekarang menjalankan image yang sama seperti yang di-deploy
+  # (network host + Postgres service): jalankan migrasi dengan image `migrate`,
+  # boot image `web`, lalu pastikan /api/health, halaman depan, dan image
+  # optimizer benar-benar merespons.
   docker-build:
-    name: 🐳 Docker Build
+    name: 🐳 Docker Build & Smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     needs: [build, test]
     # Verify the secret-free Docker build on PRs too, before changes reach main.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: ci
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # Dipakai container (network host) → host runner memakai localhost.
+      SMOKE_DATABASE_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
+      SMOKE_IMAGE: anichin:ci-${{ github.sha }}
+      SMOKE_MIGRATE_IMAGE: anichin:ci-migrate-${{ github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -369,6 +400,75 @@ jobs:
           cache-from: type=local,src=/tmp/.docker-cache
           cache-to: type=local,dest=/tmp/.docker-cache,mode=max
 
+      - name: Build image migrate target (Prisma CLI, untuk migrasi)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: migrate
+          push: false
+          load: true
+          tags: anichin:ci-migrate-${{ github.sha }}
+          build-args: |
+            DATABASE_PROVIDER: postgresql
+          # Layer `deps`/`builder` sudah dari build di atas → hampir gratis.
+          cache-from: type=local,src=/tmp/.docker-cache
+
       - name: Verify image has correct binaries
         run: |
-          docker run --rm anichin:ci-${{ github.sha }} sh -c "ls -la /app/server.js && node --version"
+          docker run --rm "$SMOKE_IMAGE" sh -c "ls -la /app/server.js && node --version"
+          # Prisma query engine WAJIB ada di image (kalau tidak, request pertama
+          # ke DB akan gagal dengan PrismaClientInitializationError).
+          docker run --rm --entrypoint sh "$SMOKE_IMAGE" -c \
+            "ls -l /app/node_modules/.prisma/client/ | grep libquery_engine"
+
+      - name: Run Prisma migrations with the migrate image
+        run: |
+          docker run --rm --network host \
+            -e DATABASE_URL="$SMOKE_DATABASE_URL" \
+            -e NODE_ENV=production \
+            "$SMOKE_MIGRATE_IMAGE" bunx prisma migrate deploy
+
+      - name: Boot web image and verify it actually serves requests
+        run: |
+          set -euo pipefail
+          docker rm -f anichin-smoke >/dev/null 2>&1 || true
+          docker run -d --name anichin-smoke --network host \
+            -e NODE_ENV=production \
+            -e DATABASE_URL="$SMOKE_DATABASE_URL" \
+            -e NEXTAUTH_URL="http://localhost:3000" \
+            -e NEXTAUTH_SECRET="ci-smoke-secret-not-for-production-32chars" \
+            -e TWO_FACTOR_ENCRYPTION_KEY="$(printf 'a%.0s' $(seq 1 64))" \
+            "$SMOKE_IMAGE"
+
+          echo "⏳ Menunggu /api/health…"
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 5 http://localhost:3000/api/health | grep -q '"status":"ok"'; then
+              ok=1; echo "✓ /api/health status=ok (percobaan $i)"; break
+            fi
+            sleep 3
+          done
+          if [ "$ok" != "1" ]; then
+            echo "✗ Server tidak pernah melaporkan status ok"
+            docker logs --tail 80 anichin-smoke || true
+            exit 1
+          fi
+
+          echo "▶ Cek halaman & endpoint lain…"
+          curl -fsS -o /dev/null -w "Home: %{http_code}\n" http://localhost:3000/
+          curl -fsS http://localhost:3000/api/auth/providers | grep -q '"credentials"'
+          echo "✓ Auth providers OK"
+          # Image optimizer (next/image + sharp) — ini yang gagal kalau
+          # binary sharp tidak ikut ke output standalone.
+          curl -fsS -o /dev/null -w "Image optimizer: %{http_code}\n" \
+            "http://localhost:3000/_next/image?url=%2Ficon-192.png&w=64&q=75"
+          echo "✓ Runtime smoke test lulus"
+
+      - name: Container logs (selalu, untuk diagnosa)
+        if: always()
+        run: docker logs anichin-smoke 2>&1 | tail -40 || true
+
+      - name: Cleanup container
+        if: always()
+        run: docker rm -f anichin-smoke >/dev/null 2>&1 || true
