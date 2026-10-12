@@ -3,9 +3,13 @@
 # Triggered: push to main, manual dispatch
 # Features: build → push image → migrate DB → deploy → health check → rollback on fail
 #
-# Catatan perilaku: kalau `DEPLOY_HOST` belum diset, job ini GAGAL (bukan
-# hijau-palsu). Untuk sengaja menjalankan build-only, set repository variable
-# `BUILD_ONLY=true` (Settings → Secrets and variables → Actions → Variables).
+# Catatan perilaku: kalau `DEPLOY_HOST` belum diset, job `deploy` DI-SKIP dan
+# run tetap hijau — tetapi job `preflight` selalu menuliskan annotation yang
+# menegaskan bahwa tidak ada yang di-deploy, jadi tidak ada "hijau palsu" yang
+# diam. `workflow_dispatch` manual tanpa target tetap GAGAL keras (niat
+# eksplisit untuk deploy tidak boleh berakhir no-op). Untuk sengaja menjalankan
+# build-only, set repository variable `BUILD_ONLY=true`
+# (Settings → Secrets and variables → Actions → Variables).
 # ============================================================================
 name: Deploy Production
 
@@ -38,22 +42,29 @@ permissions:
   contents: read
 
 jobs:
-  deploy:
-    name: 🚀 Deploy to ${{ github.event.inputs.environment || 'production' }}
+  # ── Job 1: Preflight — deteksi target deploy ───────────────
+  # `secrets` tidak bisa dibaca di `jobs.<id>.if`, jadi deteksi konfigurasi
+  # dipisah ke job sendiri lalu diteruskan ke job `deploy` lewat outputs+needs.
+  # Job inilah yang selalu "bersuara" (annotation) soal apa yang sebenarnya
+  # terjadi, supaya run hijau tidak pernah berarti "sudah di-deploy".
+  preflight:
+    name: 🧭 Preflight
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment:
-      name: ${{ github.event.inputs.environment || 'production' }}
+    timeout-minutes: 5
+    outputs:
+      deploy: ${{ steps.detect.outputs.deploy }}
+      registry: ${{ steps.detect.outputs.registry }}
+      smoke: ${{ steps.detect.outputs.smoke }}
+      slack: ${{ steps.detect.outputs.slack }}
+      build_only: ${{ steps.detect.outputs.build_only }}
+      proceed: ${{ steps.detect.outputs.proceed }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      # ── Preflight: decide which optional stages can run ─────
       # NOTE: `env.X` set on a step is NOT visible in that same step's `if:`,
       # so the old `if: env.DEPLOY_HOST != ''` conditions were always false
       # (deploy/login/smoke silently skipped). Secrets are resolved here once
-      # and exposed as step outputs instead.
+      # and exposed as job outputs instead.
       - name: 🧭 Preflight (detect configured secrets)
-        id: preflight
+        id: detect
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           REGISTRY: ${{ secrets.REGISTRY }}
@@ -70,26 +81,50 @@ jobs:
             flag slack      "$SLACK_WEBHOOK"
             flag build_only "$BUILD_ONLY"
           } | tee -a "$GITHUB_OUTPUT"
-          if [ -z "$DEPLOY_HOST" ]; then
-            echo "::warning::DEPLOY_HOST secret is not set - the pipeline can only build the image (no SSH deploy)."
+
+          # `proceed` = job deploy punya sesuatu yang bisa dikerjakan.
+          if [ -n "$DEPLOY_HOST" ] || [ "$BUILD_ONLY" = "true" ]; then
+            echo "proceed=true" | tee -a "$GITHUB_OUTPUT"
+          else
+            echo "proceed=false" | tee -a "$GITHUB_OUTPUT"
           fi
 
-      # ── Guard: jangan lapor "sukses" kalau tidak men-deploy ──
-      # Sebelumnya, tanpa DEPLOY_HOST langkah Deploy/SSH + smoke test hanya
-      # di-skip sehingga run terlihat hijau padahal image berhenti di runner
-      # (tidak ada server yang di-deploy, tidak ada yang diuji).
-      # Sekarang push ke main GAGAL sampai salah satu dipilih:
-      #   1. isi secret DEPLOY_HOST/DEPLOY_USER/DEPLOY_SSH_KEY (+ NEXTAUTH_URL), atau
-      #   2. set repository variable BUILD_ONLY=true kalau memang build-only.
-      - name: ❌ Guard — target deploy terkonfigurasi
-        if: github.event.inputs.rollback != 'true' && steps.preflight.outputs.deploy != 'true' && steps.preflight.outputs.build_only != 'true'
+          # Alasan selalu ditulis eksplisit sebagai annotation.
+          if [ -n "$DEPLOY_HOST" ]; then
+            echo "✅ DEPLOY_HOST terkonfigurasi — build → push → deploy → smoke test akan berjalan."
+          elif [ "$BUILD_ONLY" = "true" ]; then
+            echo "::notice title=Mode build-only::BUILD_ONLY=true — image di-build (dan di-push bila REGISTRY diset); langkah SSH deploy + smoke test dilewati."
+          else
+            echo "::warning title=Deploy dilewati — tidak ada target::DEPLOY_HOST kosong dan BUILD_ONLY tidak diset, jadi job deploy di-skip: tidak ada image yang di-build dan tidak ada server yang di-deploy. Isi secret DEPLOY_HOST/DEPLOY_USER/DEPLOY_SSH_KEY (+ NEXTAUTH_URL untuk smoke test) agar benar-benar men-deploy, atau set repository variable BUILD_ONLY=true bila memang hanya ingin build image."
+          fi
+
+      # ── Guard: dispatch manual tanpa target = GAGAL keras ───
+      # Push ke main tanpa konfigurasi hanya di-skip (lihat warning di atas),
+      # tetapi menjalankan workflow ini manual adalah niat eksplisit untuk
+      # deploy/rollback — tidak boleh berakhir diam-diam tanpa apa pun.
+      - name: ❌ Guard — workflow_dispatch tanpa target deploy
+        if: github.event_name == 'workflow_dispatch' && steps.detect.outputs.proceed != 'true'
         run: |
-          echo "::error title=Deploy tidak dikonfigurasi::DEPLOY_HOST belum diset sehingga hanya image yang di-build — tidak ada server yang di-deploy dan smoke test tidak berjalan. Isi secret deploy, atau set repository variable BUILD_ONLY=true bila memang ingin build-only."
+          echo "::error title=Deploy tidak dikonfigurasi::Workflow ini dijalankan manual, tetapi DEPLOY_HOST kosong dan BUILD_ONLY tidak diset — tidak ada yang bisa di-deploy maupun di-rollback. Isi secret deploy, atau set repository variable BUILD_ONLY=true bila memang ingin build-only."
           exit 1
+
+  # ── Job 2: Deploy (build → push → SSH → smoke test) ────────
+  deploy:
+    name: 🚀 Deploy to ${{ github.event.inputs.environment || 'production' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: preflight
+    # Di-skip (bukan gagal) bila repo belum punya target deploy dan BUILD_ONLY
+    # tidak diset — push ke main tidak lagi merah hanya karena belum ada server.
+    if: needs.preflight.outputs.proceed == 'true'
+    environment:
+      name: ${{ github.event.inputs.environment || 'production' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # ── Pre-deploy: validate OAuth secrets are set ──────────
       - name: 🔍 Validate OAuth configuration
-        if: github.event.inputs.rollback != 'true' && steps.preflight.outputs.deploy == 'true'
+        if: github.event.inputs.rollback != 'true' && needs.preflight.outputs.deploy == 'true'
         env:
           NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
           NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
@@ -147,7 +182,7 @@ jobs:
 
       # ── Rollback path ─────────────────────────────────────
       - name: 🔄 Rollback to previous version
-        if: github.event.inputs.rollback == 'true' && steps.preflight.outputs.deploy == 'true'
+        if: github.event.inputs.rollback == 'true' && needs.preflight.outputs.deploy == 'true'
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -200,7 +235,7 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Login to registry
-        if: github.event.inputs.rollback != 'true' && steps.preflight.outputs.registry == 'true'
+        if: github.event.inputs.rollback != 'true' && needs.preflight.outputs.registry == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ${{ secrets.REGISTRY }}
@@ -213,7 +248,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          push: ${{ steps.preflight.outputs.registry == 'true' }}
+          push: ${{ needs.preflight.outputs.registry == 'true' }}
           tags: |
             ${{ secrets.REGISTRY || 'anichin' }}/anichin:prod-${{ github.sha }}
             ${{ secrets.REGISTRY || 'anichin' }}/anichin:prod-latest
@@ -221,11 +256,11 @@ jobs:
           build-args: |
             DATABASE_PROVIDER=postgresql
           # Registry cache needs push access -> only when a registry is configured
-          cache-from: ${{ steps.preflight.outputs.registry == 'true' && format('type=registry,ref={0}/anichin:buildcache', secrets.REGISTRY) || '' }}
-          cache-to: ${{ steps.preflight.outputs.registry == 'true' && format('type=registry,ref={0}/anichin:buildcache,mode=max', secrets.REGISTRY) || '' }}
+          cache-from: ${{ needs.preflight.outputs.registry == 'true' && format('type=registry,ref={0}/anichin:buildcache', secrets.REGISTRY) || '' }}
+          cache-to: ${{ needs.preflight.outputs.registry == 'true' && format('type=registry,ref={0}/anichin:buildcache,mode=max', secrets.REGISTRY) || '' }}
 
       - name: Deploy via SSH (Docker Compose)
-        if: github.event.inputs.rollback != 'true' && steps.preflight.outputs.deploy == 'true'
+        if: github.event.inputs.rollback != 'true' && needs.preflight.outputs.deploy == 'true'
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -295,7 +330,7 @@ jobs:
           EOF
 
       - name: Run smoke tests
-        if: github.event.inputs.rollback != 'true' && steps.preflight.outputs.deploy == 'true' && steps.preflight.outputs.smoke == 'true'
+        if: github.event.inputs.rollback != 'true' && needs.preflight.outputs.deploy == 'true' && needs.preflight.outputs.smoke == 'true'
         env:
           NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
         run: |
@@ -315,7 +350,7 @@ jobs:
           echo "✓ All smoke tests passed"
 
       - name: Notify Slack on failure
-        if: failure() && steps.preflight.outputs.slack == 'true'
+        if: failure() && needs.preflight.outputs.slack == 'true'
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
           ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
@@ -329,7 +364,7 @@ jobs:
             }
 
       - name: Notify Slack on success
-        if: success() && steps.preflight.outputs.slack == 'true'
+        if: success() && needs.preflight.outputs.slack == 'true'
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
           ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
