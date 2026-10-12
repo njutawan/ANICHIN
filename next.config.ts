@@ -47,6 +47,28 @@ const nextConfig: NextConfig = {
     ];
   },
   /**
+   * P0-DEPLOY: query engine Prisma tidak selalu ikut tersalin ke output
+   * `standalone` (Next menelusuri `require` dinamis milik `@prisma/client`;
+   * `libquery_engine-*.so.node` dibaca lewat path yang dihitung saat runtime,
+   * jadi bisa lolos dari file tracing). Gejalanya baru terlihat saat container
+   * benar-benar melayani request:
+   *   PrismaClientInitializationError: Prisma Client could not locate the
+   *   Query Engine for runtime "linux-musl-openssl-3.0.x"
+   * `outputFileTracingIncludes` memaksa file engine + client ikut ke output,
+   * sehingga image Docker (dan bundel serverless Vercel) berisi engine yang
+   * cocok dengan platform runtime-nya.
+   */
+  outputFileTracingIncludes: {
+    '/**/*': [
+      './node_modules/.prisma/client/**/*',
+      // `next/image` memakai sharp (+ binary libvips per-platform di @img/*).
+      // Tanpa ini, optimasi gambar bisa 500 (`Module not found: sharp`) di
+      // image standalone meski build-nya sendiri lulus.
+      './node_modules/sharp/**/*',
+      './node_modules/@img/**/*',
+    ],
+  },
+  /**
    * Nilai ini di-inline saat build (juga tersedia di browser), dipakai untuk
    * versi cache service worker. Ganti tidak perlu — otomatis dari commit.
    */

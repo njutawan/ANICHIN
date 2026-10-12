@@ -7,9 +7,19 @@
 # ─────────────────────────────────────────────────────────────
 # - Linux server (Ubuntu 22.04+ recommended) with:
 #   - 2+ vCPU, 4GB+ RAM, 20GB+ SSD
-#   - Docker 24+ and Docker Compose v2+
+#   - Docker 24+ dan plugin `docker compose` v2 (`docker compose version`).
+#     `docker-compose` v1 sudah EOL dan tidak lagi jadi jalur utama — semua
+#     skrip di repo ini memakai `docker compose` dengan fallback v1.
 #   - Domain name (e.g., anichin.id) with DNS A record pointing to server
 # - GitHub repository with secrets configured
+#
+# Image runtime: Node 24 (Active LTS) di node:24-alpine + `openssl`.
+#   • Node 20 sudah End-Of-Life sejak April 2026 → tidak ada patch keamanan,
+#     karena itu Dockerfile memakai node:24-alpine.
+#   • `openssl` wajib: Prisma memilih query engine berdasarkan libssl yang ada.
+#     Alpine tidak menyertakan libssl, dan tanpa itu request pertama ke DB
+#     gagal dengan "Prisma Client could not locate the Query Engine".
+#   Server TIDAK perlu memasang Node: semuanya berjalan di dalam container.
 
 # ─────────────────────────────────────────────────────────────
 # STEP 1: Server setup
@@ -66,15 +76,38 @@ cat .env | grep -v "^#" | grep -v "^$"
 # STEP 3: Create backup directory
 # ─────────────────────────────────────────────────────────────
 
-mkdir -p backups/wal
+mkdir -p backups
 chmod 755 backups
+
+# Catatan: direktori `backups/wal` tidak dipakai lagi. WAL archiving di
+# docker-compose.prod.yml dihapus karena bind mount-nya selalu gagal ditulis
+# (container PostgreSQL berjalan sebagai uid 70, sedangkan direktori dibuat
+# Docker sebagai root) — dengan archive_mode=on, WAL yang gagal diarsipkan
+# menumpuk di pg_wal sampai disk penuh lalu database berhenti menerima
+# tulisan. Backup resmi = service `backup-cron` (pg_dump harian, retensi 14
+# hari) + `scripts/restore-db.sh`.
 
 # ─────────────────────────────────────────────────────────────
 # STEP 4: Initial deploy
 # ─────────────────────────────────────────────────────────────
-
-# Build and start all services
+#
+# Dua jalur yang sama-sama valid (keduanya memakai tag image yang sama):
+#
+# A. Server punya source repo → build di server
 docker compose -f docker-compose.prod.yml up -d --build
+#
+# B. Server TIDAK punya source (image dari CI/registry) → pull
+#    Nama image diatur ANICHIN_IMAGE / ANICHIN_MIGRATE_IMAGE di .env
+#    (default: anichin/anichin:prod-current dan anichin/anichin:prod-migrate).
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+#
+# Pipeline GitHub (Deploy Production) memakai jalur B. Server hanya perlu
+# docker-compose.prod.yml + Caddyfile + scripts/*.sh (dikirim otomatis oleh
+# workflow) dan file .env (dibuat otomatis dari secret bila belum ada).
+#
+# Untuk registry privat, login sekali di server:
+#   docker login ghcr.io -u <user> -p <token>
 
 # Watch migration progress
 docker compose -f docker-compose.prod.yml logs -f migrate
@@ -85,6 +118,11 @@ docker compose -f docker-compose.prod.yml ps
 # Verify health
 curl http://localhost:3000/api/health
 # Expected: {"status":"ok","checks":{"db":{"status":"ok"},...}}
+
+# Validasi Caddyfile (WAJIB bila mengubahnya): direktif/matcher yang salah
+# membuat container `caddy` gagal start → seluruh situs tidak bisa diakses.
+docker compose -f docker-compose.prod.yml run --rm --no-deps caddy \
+  validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
 # ─────────────────────────────────────────────────────────────
 # STEP 5: Migrate data from dev SQLite (optional, one-time)
@@ -132,23 +170,41 @@ echo | openssl s_client -connect anichin.id:443 -servername anichin.id 2>/dev/nu
 # On your local machine (with gh CLI installed):
 gh auth login
 
-# Set required secrets
-gh secret set DATABASE_URL --body "postgresql://anichin:$POSTGRES_PASSWORD@db:5432/anichin?schema=public"
-gh secret set NEXTAUTH_SECRET --body "$NEXTAUTH_SECRET"
-gh secret set NEXTAUTH_URL --body "https://anichin.id"
+# WAJIB (deploy dibatalkan tanpa ini — lihat langkah "Validate deployment
+# configuration" di .github/workflows/deploy.yml)
+gh secret set NEXTAUTH_SECRET --body "$NEXTAUTH_SECRET"   # ≥32 karakter
+gh secret set NEXTAUTH_URL --body "https://anichin.id"    # wajib https://
 gh secret set POSTGRES_PASSWORD --body "$POSTGRES_PASSWORD"
-gh secret set SITE_DOMAIN --body "anichin.id"
 
-# SSH deploy secrets
+# SSH deploy secrets (dibutuhkan agar benar-benar men-deploy; tanpa
+# DEPLOY_HOST job `deploy` di-skip dan hanya image yang di-build)
 gh secret set DEPLOY_HOST --body "your-server-ip"
 gh secret set DEPLOY_USER --body "deploy"
 gh secret set DEPLOY_SSH_KEY --body "$(cat ~/.ssh/deploy_key)"
 
-# Optional: registry + Slack
+# OPSIONAL — kalau tidak diisi, kunci itu tidak ditulis ke .env:
+gh secret set SITE_DOMAIN --body "anichin.id"           # default: host dari NEXTAUTH_URL
+gh secret set NEXT_PUBLIC_SITE_URL --body "https://anichin.id"  # canonical/OG di bundle browser
+gh secret set TWO_FACTOR_ENCRYPTION_KEY --body "$(openssl rand -hex 32)"  # 64 hex; tanpa ini 2FA gagal
+gh secret set IP_HASH_SALT --body "$(openssl rand -hex 16)"    # salt hash IP di audit log
+gh secret set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET
+gh secret set SMTP_HOST / SMTP_PORT / SMTP_SECURE / SMTP_USER / SMTP_PASS / SMTP_FROM
+
+# Registry (agar server bisa `docker pull`; kalau kosong server harus punya source)
 gh secret set REGISTRY --body "ghcr.io/your-org"
 gh secret set REGISTRY_USER --body "your-github-username"
 gh secret set REGISTRY_PASS --body "$GITHUB_TOKEN"
+
+# Notifikasi (opsional)
 gh secret set SLACK_WEBHOOK --body "https://hooks.slack.com/services/..."
+
+# Yang dilakukan pipeline dengan secret tersebut:
+#   • File .env di server DIBUAT dari secret di atas bila belum ada, dan
+#     kunci yang sudah ada hanya ditimpa bila secret-nya diisi. Setelan lokal
+#     lain (mis. SMTP_* yang diisi manual) tidak pernah dihapus —
+#     lihat scripts/deploy-env.sh.
+#   • Nilai secret dikirim lewat stdin ssh, tidak pernah masuk argv server
+#     maupun log Actions (selain di-mask otomatis oleh GitHub).
 
 # ─────────────────────────────────────────────────────────────
 # STEP 9: Set up SSH key for auto-deploy
@@ -197,19 +253,35 @@ gh run watch
 #                                  pernah berarti "sudah di-deploy" tanpa bukti.
 # `workflow_dispatch` manual (termasuk rollback) pada kondisi 3 tetap GAGAL keras: menjalankan
 # workflow dengan tangan adalah niat eksplisit untuk deploy, tidak boleh berakhir no-op.
+#
+# Yang dilakukan pipeline di server (dir /opt/anichin-<environment>):
+#   a. kirim docker-compose.prod.yml + Caddyfile + scripts/*.sh dari commit
+#      yang sedang di-deploy (source aplikasi TIDAK dikirim — sudah ada di image);
+#   b. tulis/perbarui .env dari secret (scripts/deploy-env.sh) — file yang sudah
+#      ada tidak pernah dihapus, kunci yang tidak punya secret dibiarkan apa adanya;
+#   c. `caddy validate` atas Caddyfile sebelum menyentuh stack;
+#      (satu direktif/matcher salah = container caddy gagal start = situs mati)
+#   d. docker compose pull → up -d → tunggu service `migrate` exit 0 →
+#      health check container `web`;
+#      semua di scripts/compose-deploy.sh (bisa dijalankan manual di server);
+#   e. bila (d) gagal: image sebelumnya di-tag ulang sebagai image aktif lalu
+#      stack dijalankan lagi (rollback otomatis), step tetap GAGAL supaya terlihat.
+#
+# Registry privat: server perlu `docker login <registry>` sekali saja, karena
+# `docker compose pull` berjalan di server (bukan di runner GitHub).
 
 # ─────────────────────────────────────────────────────────────
 # Operations: Backup & Restore
 # ─────────────────────────────────────────────────────────────
 
 # Manual backup (creates timestamped file)
-docker compose -f docker-compose.prod.yml exec backup /usr/local/bin/backup.sh manual-$(date +%Y%m%d)
+docker compose -f docker-compose.prod.yml exec backup-cron /usr/local/bin/backup.sh manual-$(date +%Y%m%d)
 
 # List backups
 ls -la backups/
 
 # Restore from backup (interactive)
-docker compose -f docker-compose.prod.yml exec -it backup /usr/local/bin/restore-db.sh auto-20260101-020000
+docker compose -f docker-compose.prod.yml exec -it backup-cron /usr/local/bin/restore-db.sh auto-20260101-020000
 
 # Download backup to local machine
 scp deploy@server:/opt/anichin/backups/auto-*.dump ./local-backup/
@@ -227,6 +299,14 @@ docker compose -f docker-compose.prod.yml logs -f db
 # Tail Caddy access log
 docker compose -f docker-compose.prod.yml exec caddy tail -f /data/access.log
 
+# Audit log aplikasi (JSON Lines) — disimpan di named volume `logs_data`,
+# bukan bind mount ./logs, supaya direktori /app/logs tetap milik user non-root
+# di image (bind mount mewarisi kepemilikan direktori host dan membuat
+# audit-log gagal menulis secara diam-diam).
+docker compose -f docker-compose.prod.yml exec web tail -f /app/logs/audit.jsonl
+# Ekspor ke host:
+docker compose -f docker-compose.prod.yml exec -T web cat /app/logs/audit.jsonl > audit-$(date +%F).jsonl
+
 # Check service status
 docker compose -f docker-compose.prod.yml ps
 
@@ -234,18 +314,31 @@ docker compose -f docker-compose.prod.yml ps
 # Operations: Rollback
 # ─────────────────────────────────────────────────────────────
 
-# Trigger rollback via GitHub Actions
+# Trigger rollback via GitHub Actions (memakai tag rollback TERBARU)
 gh workflow run deploy.yml \
   -f environment=production \
   -f rollback=true
+# Di server ini menjalankan scripts/compose-deploy.sh dengan ROLLBACK_ONLY=1:
+# tag rollback terbaru untuk `web` dan `migrate` dikembalikan ke tag aktif,
+# lalu stack dijalankan ulang + health check.
 
 # Manual rollback on server
 ssh deploy@server
-cd /opt/anichin
-docker images --format "{{.Tag}}" anichin/anichin | grep -E "^prod-rollback-"
-# Pick a tag, then:
-docker tag anichin/anichin:prod-rollback-1234567890 anichin/anichin:prod-current
+cd /opt/anichin-production
+./scripts/compose-deploy.sh            # set ROLLBACK_ONLY=1 untuk pakai tag rollback terbaru:
+       ROLLBACK_ONLY=1 ./scripts/compose-deploy.sh
+
+# Tag rollback dibuat otomatis setiap deploy (mudah dibaca manusia):
+#   <repo>:prod-current-rollback-<epoch>   ← image web sebelum deploy terakhir
+#   <repo>:prod-migrate-rollback-<epoch>   ← image migrate sebelum deploy terakhir
+docker images --format "{{.Repository}}:{{.Tag}}" | grep rollback
+# Pilih tag, lalu jadikan aktif kembali:
+docker tag <repo>:prod-current-rollback-<epoch> <repo>:prod-current
 docker compose -f docker-compose.prod.yml up -d --remove-orphans
+
+# Penting: migrasi Prisma bersifat MAJU-SAJA. Rollback mengembalikan kode,
+# bukan skema database — pastikan migrasi terakhir kompatibel dengan kode lama,
+# atau pulihkan dari backup (lihat bagian Backup & Restore).
 
 # ─────────────────────────────────────────────────────────────
 # Operations: Update to new version

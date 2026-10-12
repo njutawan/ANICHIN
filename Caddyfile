@@ -3,7 +3,13 @@
 # Auto-HTTPS via Let's Encrypt + security headers + reverse proxy
 # Usage:
 #   Set SITE_DOMAIN in .env (e.g., anichin.id)
-#   docker-compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Validasi sebelum deploy (wajib — Caddy GAGAL START total kalau ada satu
+# direktif/matcher yang salah, dan container `caddy` yang mati berarti situs
+# tidak bisa diakses sama sekali):
+#   docker compose -f docker-compose.prod.yml run --rm --no-deps caddy \
+#     validate --config /etc/caddy/Caddyfile --adapter caddyfile
 # ============================================================================
 
 {$SITE_DOMAIN} {
@@ -46,19 +52,6 @@
 		}
 	}
 
-	# ── Port transform proxy (for mini-services) ─────────────
-	@transform_port_query {
-		query XTransformPort=*
-	}
-	handle @transform_port_query {
-		reverse_proxy localhost:{query.XTransformPort} {
-			header_up Host {host}
-			header_up X-Forwarded-For {remote_host}
-			header_up X-Forwarded-Proto {scheme}
-			header_up X-Real-IP {remote_host}
-		}
-	}
-
 	# ── Default: Next.js app ────────────────────────────────
 	handle {
 		reverse_proxy web:3000 {
@@ -82,11 +75,30 @@
 		format json
 	}
 
-	# ── Rate limiting (basic) ────────────────────────────────
-	# More sophisticated rate limiting is handled by the app via Redis
-	@limit auth queries {http.matchers.path.start /api/auth} {
-		# Apply per-IP rate limit to auth endpoints
-	}
+	# ── Rate limiting ────────────────────────────────────────
+	# Rate limit ketat ditangani aplikasi lewat Redis (src/lib/rate-limit.ts),
+	# bukan di Caddy: limitnya per-akun/per-IP dengan tier berbeda. Jangan
+	# menambahkan matcher bernama di sini tanpa direktif yang memakainya —
+	# matcher tak dikenal = `caddy validate` gagal = container tidak start.
+	#
+	# ── Catatan X-Forwarded-For (JANGAN dihapus tanpa alasan) ─
+	# Caddy 2.7+ mengabaikan X-Forwarded-* kiriman klien bila sumbernya bukan
+	# proxy yang dipercaya (default: tidak ada yang dipercaya), dan blok
+	# `header_up X-Forwarded-For {remote_host}` di atas MENIMPA (bukan
+	# menambahkan) header itu dengan IP socket asli. Hasilnya rate limit,
+	# login lockout, dan audit log aplikasi tidak bisa dipalsukan klien.
+	# Kalau situs nanti diletakkan di belakang CDN/LB (Cloudflare dll), aktifkan
+	# blok GLOBAL berikut di PALING ATAS file ini dan isi hanya CIDR proxy
+	# tersebut — JANGAN pakai `private_ranges` (trafik dari internet masuk ke
+	# container lewat gateway Docker yang juga privat, sehingga XFF karangan
+	# klien akan ikut dipercaya):
+	#
+	#   {
+	#       servers {
+	#           trusted_proxies static 173.245.48.0/20 103.21.244.0/22 ...
+	#           client_ip_headers CF-Connecting-IP X-Forwarded-For
+	#       }
+	#   }
 }
 
 # ── WWW → non-WWW redirect ─────────────────────────────────
