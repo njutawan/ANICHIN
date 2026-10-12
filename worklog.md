@@ -3636,3 +3636,27 @@ QA / Verification:
 Stage Summary:
 - Hardening repo selesai & terverifikasi CI. Audit WordPress selesai secara pasif dengan bukti mentah; laporan privat diperbarui (TL;DR, §6 urutan aksi, §7 detail WP).
 - **Perlu tindakan Anda:** aktifkan PVR + Dependabot alerts; merge PR #9; putuskan pipeline deploy (isi secret atau set `BUILD_ONLY=true`); tambah SPF/DKIM/DMARC; batasi endpoint users WP; pasang header keamanan di Cloudflare.
+
+---
+Task ID: CI-AUDIT-GATE-GREEN
+Agent: Arena Agent Mode
+Task: "Perbaiki bagian ini di dalam GitHub" → bagian yang merah: job `🔒 Security Audit` (`bun audit --production`, gate blocking) yang menggagalkan semua run CI baru, termasuk 6 PR Dependabot. Sekalian keputusan pemilik untuk Deploy Production: `BUILD_ONLY=true`.
+
+Work Log:
+- **Diagnosis (GitHub API, log run tidak bisa diunduh dari sandbox karena host `results-receiver.actions.githubusercontent.com` di luar allowlist → dibaca lewat `actions/runs/<id>/jobs`):** run CI #12–#17 (PR Dependabot) semuanya gagal di step `Run bun audit (blocking)`; run Deploy Production di `main` (37285055387) gagal di step `❌ Guard — target deploy terkonfigurasi`.
+- **Akar masalah audit:** `bun audit --production` pada lockfile lama → `8 vulnerabilities (3 high, 4 moderate, 1 low)`, exit 1, dari 3 paket: `next@16.3.7` (6 advisory; GHSA-cjq9-62q9-8jv4 SSRF Image Optimization = high, plus cache poisoning SSG/ISR & draft-mode leak; fix ≥ 16.3.8), `sharp@0.35.4` (GHSA-wq5f-xc86-pv6w high, librsvg CVE-2026-96889; fix 0.35.5), `source-map-js@1.2.1` (GHSA-68fv-2mgg-jv7q high, event-loop DoS; fix 1.2.2; transitive via `next > postcss`, `prisma > @prisma/config > c12 > magicast`, `css-tree`).
+- **Kenapa 6 PR Dependabot ikut merah:** PR #12 sudah menaikkan `next`→16.4.0 & `sharp`→0.35.5, tetapi `source-map-js` transitive tidak di-refresh oleh Dependabot → gate tetap gagal. PR lain (#13–#17) tidak menyentuh ketiganya sama sekali.
+- **Perbaikan (commit `d2e0b77`, PR #18):** `package.json` → `next ^16.3.5`→`^16.4.0`, `sharp 0.35.4`→`0.35.5`; `bun.lock` di-refresh lewat `bun install` + `bun update source-map-js` → next 16.3.7→16.4.0 (`@next/env` + 8 `@next/swc-*`), sharp 0.35.4→0.35.5 (20 entri `@img/*`, libvips 1.3.3→1.3.4), source-map-js 1.2.1→1.2.2. Diff lock 40 baris, tanpa churn paket lain.
+- **Sisa yang belum bisa ditutup:** `braces@3.0.3` (dev-only, `eslint-config-next > @next/eslint-plugin-next > fast-glob > micromatch`) — GHSA-vfj7-8cjw-p6xm high, **belum ada rilis perbaikan di npm** (3.0.3 versi terbaru). Tidak menggagalkan CI karena gate memakai `--production`.
+- **Deploy Production / `BUILD_ONLY`:** dicoba set lewat API (`PUT /repos/njutawan/ANICHIN/actions/variables/BUILD_ONLY`) → `403 Resource not accessible by integration` (list variables juga 403, sama seperti `gh secret list`). Token otomasi tidak punya izin mengelola variables/secrets repo → **perlu diset manual oleh pemilik**: Settings → Secrets and variables → Actions → Variables → `BUILD_ONLY` = `true`. Setelah itu guard ter-lewat dan job deploy berhenti di build image (langkah SSH deploy + smoke test tetap ter-skip sampai `DEPLOY_HOST`/`DEPLOY_USER`/`DEPLOY_SSH_KEY`/`NEXTAUTH_URL` diisi).
+
+QA / Verification:
+- `bun audit --production` → `No vulnerabilities found (checked 377 packages)`, **exit 0** (sebelumnya exit 1, 3 high). `bun audit` (termasuk dev) → tinggal `braces` (lihat di atas).
+- `bun install --frozen-lockfile` → `Checked 743 installs across 860 packages (no changes)` → lock konsisten dengan package.json (syarat semua job CI).
+- Lokal: `bun run lint` → exit 0. `bun run test` → **32/33 file, 295 test lulus**; `src/lib/auth.test.ts` error `Cannot find module '.prisma/client/default'` karena `prisma generate` gagal di sandbox (`binaries.prisma.sh` diblokir allowlist) — environmental, bukan regresi. `bunx tsc --noEmit` → satu-satunya error `src/lib/db.ts(1,10) TS2305 PrismaClient` dari sebab yang sama.
+- **CI PR #18 (run 38202477026, commit `d2e0b77`): SEMUA HIJAU** — 🧹 Lint & Type-check 46s, 🧪 Unit Tests 46s, 🏗️ Build 1m7s, 🔒 Security Audit 1m12s, 🎭 E2E 1m32s, 🐳 Docker Build 3m8s, CodeQL pass. Ini sekaligus memvalidasi next 16.4.0 end-to-end (build produksi + standalone smoke test + Playwright).
+- Rilis Next 16.4.0 (6 Okt 2026) dicek: tidak ada breaking change di release notes; Cache Components hanya jadi rekomendasi (app lama tidak otomatis memakainya); syarat Node ≥ 20.9 (Dockerfile `node:20-alpine`, `engines: node >=20`).
+
+Stage Summary:
+- Gate audit produksi hijau lagi → push ke `main` dan PR (termasuk PR Dependabot yang di-rebase) tidak lagi gagal di Security Audit. Perubahan sempit: 2 baris package.json + 40 baris bun.lock, nol perubahan kode aplikasi.
+- **Perlu tindakan Anda:** (1) merge PR #18; (2) set repository variable `BUILD_ONLY=true` manual (token otomasi 403) supaya Deploy Production di `main` tidak merah; (3) setelah merge, PR Dependabot #12 akan konflik di `bun.lock` dan sebagian isinya sudah tercakup — biarkan Dependabot rebase atau tutup; (4) untuk deploy sungguhan isi secret `DEPLOY_HOST`/`DEPLOY_USER`/`DEPLOY_SSH_KEY`/`NEXTAUTH_URL` lalu hapus `BUILD_ONLY`; (5) pantau advisory `braces` (dev-only, belum ada fix upstream).
