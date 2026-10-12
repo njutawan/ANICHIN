@@ -185,6 +185,19 @@ gh pr create --title "Test deploy" --body "Testing CI/CD"
 # Watch deploy:
 gh run watch
 
+# Perilaku workflow "Deploy Production" (.github/workflows/deploy.yml):
+#   1. DEPLOY_HOST terisi        → build → push (bila REGISTRY ada) → SSH deploy → smoke test.
+#   2. DEPLOY_HOST kosong +
+#      variable BUILD_ONLY=true  → build image saja; langkah SSH deploy & smoke test dilewati
+#                                  (annotation "Mode build-only" di job 🧭 Preflight).
+#   3. DEPLOY_HOST kosong +
+#      BUILD_ONLY tidak diset    → job 🚀 Deploy DI-SKIP dan run tetap hijau, tetapi job
+#                                  🧭 Preflight menuliskan annotation warning
+#                                  "Deploy dilewati — tidak ada target" supaya hijau tidak
+#                                  pernah berarti "sudah di-deploy" tanpa bukti.
+# `workflow_dispatch` manual (termasuk rollback) pada kondisi 3 tetap GAGAL keras: menjalankan
+# workflow dengan tangan adalah niat eksplisit untuk deploy, tidak boleh berakhir no-op.
+
 # ─────────────────────────────────────────────────────────────
 # Operations: Backup & Restore
 # ─────────────────────────────────────────────────────────────
