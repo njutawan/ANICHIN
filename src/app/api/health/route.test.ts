@@ -8,6 +8,10 @@
  *   - Memory check flips to "fail" when RSS exceeds MAX_MEMORY_MB
  *   - Cache-Control headers are set to prevent caching
  *
+ * Regresi audit F-13: endpoint publik ini TIDAK boleh membocorkan versi
+ * aplikasi / environment, dan RSS dilaporkan sebagai `rssMb` (bukan diselipkan
+ * ke `latencyMs`).
+ *
  * Mocks:
  *   - @/lib/db → $queryRaw spy (resolved or rejected per test)
  *   - @/lib/rate-limit-store → checkRedisHealth spy
@@ -68,8 +72,8 @@ describe('GET /api/health', () => {
     expect(body).toHaveProperty('status');
     expect(body).toHaveProperty('uptime');
     expect(body).toHaveProperty('timestamp');
-    expect(body).toHaveProperty('version');
-    expect(body).toHaveProperty('environment');
+    expect(body).not.toHaveProperty('version');
+    expect(body).not.toHaveProperty('environment');
     expect(body).toHaveProperty('checks');
     expect(body.checks).toHaveProperty('db');
     expect(body.checks).toHaveProperty('memory');
@@ -94,7 +98,31 @@ describe('GET /api/health', () => {
     const res = await GET();
     const body = await res.json();
     expect(body.checks.memory.status).toBe('ok');
-    expect(body.checks.memory).toHaveProperty('latencyMs');
+    // F-13: RSS sebagai angka MB yang jujur, bukan di field latencyMs.
+    expect(typeof body.checks.memory.rssMb).toBe('number');
+    expect(body.checks.memory.rssMb).toBeGreaterThan(0);
+    expect(body.checks.memory).not.toHaveProperty('latencyMs');
+  });
+
+  it('tidak membocorkan versi aplikasi, environment, atau detail internal', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const res = await GET();
+    const body = await res.json();
+    const serialized = JSON.stringify(body);
+
+    expect(body.version).toBeUndefined();
+    expect(body.environment).toBeUndefined();
+    expect(serialized).not.toContain('production');
+    expect(serialized).not.toContain('development');
+    expect(serialized).not.toContain(process.cwd());
+  });
+
+  it('status redis cukup { status, configured } tanpa latensi palsu', async () => {
+    checkRedisHealthMock.mockResolvedValue({ configured: true, connected: true });
+    const res = await GET();
+    const body = await res.json();
+
+    expect(body.checks.redis).toEqual({ status: 'ok', configured: true });
   });
 
   it('flips memory check to fail when RSS exceeds MAX_MEMORY_MB', async () => {

@@ -10,12 +10,18 @@ services:
     restart: unless-stopped
     environment:
       - POSTGRES_DB=anichin_staging
+      # Role migrasi/owner (hak DDL) — hanya dipakai service `migrate`.
       - POSTGRES_USER=anichin_staging
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-staging-password-change-me}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (jangan pakai default yang bisa ditebak)}
+      # F-16: role aplikasi (DML saja) untuk service `web`.
+      - POSTGRES_APP_USER=anichin_staging_app
+      - POSTGRES_APP_PASSWORD=${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD is required (role aplikasi DML-only)}
     ports:
       - "127.0.0.1:5433:5432"  # Different port from prod
     volumes:
       - staging_db_data:/var/lib/postgresql/data
+      # F-16: sama seperti prod — pembuat role aplikasi.
+      - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U anichin_staging"]
       interval: 10s
@@ -44,10 +50,41 @@ services:
     command: ["bunx", "prisma", "migrate", "deploy"]
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgresql://anichin_staging:${POSTGRES_PASSWORD:-staging-password-change-me}@db:5432/anichin_staging?schema=public
+      # F-16: role migrasi (owner) — butuh DDL.
+      - DATABASE_URL=postgresql://anichin_staging:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/anichin_staging?schema=public
     depends_on:
       db:
         condition: service_healthy
+
+  # ─────────────────────────────────────────────────────────────
+  # db-roles — pastikan role aplikasi (DML saja) ada & sinkron (F-16)
+  # Dijalankan setiap `up` dan idempoten. Diperlukan karena skrip initdb
+  # di entrypoint postgres hanya jalan pada VOLUME YANG MASIH KOSONG:
+  # database yang sudah ada (hasil deploy sebelum pemisahan role) tidak akan
+  # punya role aplikasi, dan tanpa langkah ini `web` akan gagal konek.
+  # Urutannya setelah `migrate` supaya tabel baru sekaligus tercakup GRANT
+  # eksplisit (selain ALTER DEFAULT PRIVILEGES).
+  # ─────────────────────────────────────────────────────────────
+  db-roles:
+    image: postgres:16-alpine
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      - PGHOST=db
+      - PGPORT=5432
+      - POSTGRES_DB=anichin_staging
+      - POSTGRES_USER=anichin_staging
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - PGPASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - POSTGRES_APP_USER=anichin_staging_app
+      - POSTGRES_APP_PASSWORD=${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD is required (role aplikasi DML-only)}
+    entrypoint: ["sh", "/docker-entrypoint-initdb.d/10-app-role.sh"]
+    volumes:
+      - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
 
   web:
     build:
@@ -66,10 +103,11 @@ services:
       - "127.0.0.1:3001:3000"
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgresql://anichin_staging:${POSTGRES_PASSWORD:-staging-password-change-me}@db:5432/anichin_staging?schema=public
+      # F-16: aplikasi memakai role DML-only, bukan role owner.
+      - DATABASE_URL=postgresql://anichin_staging_app:${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD is required (role aplikasi DML-only)}@db:5432/anichin_staging?schema=public
       - REDIS_URL=redis://redis:6379
-      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3001}
-      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-staging-secret-not-for-production-32-chars}
+      - NEXTAUTH_URL=${NEXTAUTH_URL:?NEXTAUTH_URL is required}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:?NEXTAUTH_SECRET is required (staging juga memakai cookie/JWT bertanda tangan)}
       - NEXT_TELEMETRY_DISABLED=1
       - HOSTNAME=0.0.0.0
       - PORT=3000
@@ -77,6 +115,9 @@ services:
       db:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      # F-16: role aplikasi wajib ada sebelum web start.
+      db-roles:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]

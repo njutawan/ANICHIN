@@ -214,8 +214,8 @@ Run these locally to generate secure values:
 # NEXTAUTH_SECRET (32+ chars)
 openssl rand -base64 32
 
-# TWO_FACTOR_ENCRYPTION_KEY (32+ chars)
-openssl rand -base64 32
+# TWO_FACTOR_ENCRYPTION_KEY (WAJIB 64 hex chars)
+openssl rand -hex 32
 ```
 
 ### Set via Vercel CLI

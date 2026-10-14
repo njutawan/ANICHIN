@@ -182,6 +182,11 @@ model User {
   emailVerified     DateTime? // null = not verified
   twoFactorSecret   String?   // TOTP secret (encrypted) — null = 2FA disabled
   twoFactorEnabled   Boolean   @default(false)
+  // Penomoran sesi. Nilai ini disalin ke klaim JWT saat login, dan JWT ditolak
+  // begitu nilainya di DB berbeda (lihat `jwt` callback di src/lib/auth.ts).
+  // Dinaikkan saat password direset dan saat role diubah admin → sesi lama
+  // (termasuk milik penyerang yang mencuri cookie) langsung tidak berlaku.
+  sessionVersion    Int       @default(0)
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
@@ -189,8 +194,28 @@ model User {
   comments          ServerComment[]
   verificationTokens VerificationToken[]
   passwordResets    PasswordReset[]
+  backupCodes       TwoFactorBackupCode[]
 
   @@index([email])
+}
+
+// Kode cadangan 2FA — sekali pakai (F-10 pada docs/SECURITY-AUDIT.md).
+//
+// Yang disimpan hanya hash bcrypt; kode aslinya ditampilkan sekali saat
+// dibuat/di-regenerate lalu tidak bisa dibaca lagi dari database. `usedAt`
+// diisi tepat satu kali saat kode dipakai (klaim lewat updateMany dengan
+// syarat `usedAt: null`), sehingga kode yang sama tidak bisa dipakai dua kali
+// walaupun dua login memakainya bersamaan.
+model TwoFactorBackupCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String // bcrypt hash dari kode `XXXXX-XXXXX`
+  usedAt    DateTime? // null = belum dipakai
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, usedAt])
 }
 
 // Email verification tokens (single-use, expire after 24h)

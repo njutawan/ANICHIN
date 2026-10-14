@@ -6,15 +6,16 @@ import { db } from '@/lib/db';
 import {
   generateTwoFactorSecret,
   generateQrCodeDataURL,
-  setPendingSecret,
 } from '@/lib/two-factor';
+import { setPendingSecret } from '@/lib/two-factor-pending';
 
 /**
  * POST /api/auth/2fa/setup
  *
  * Begins the 2FA enable flow for the authenticated user:
  *   1. Generates a fresh TOTP secret (NOT stored in DB yet).
- *   2. Stashes it in an in-memory pending store keyed by user ID (5 min TTL).
+ *   2. Stashes it in the pending store keyed by user ID (TTL 5 menit); Redis
+ *      bila REDIS_URL diset, kalau tidak in-memory per proses (F-11).
  *   3. Returns the secret, otpauth URL, and a QR data: URL so the frontend can
  *      render the QR code for the user's authenticator app.
  *
@@ -58,8 +59,9 @@ export async function POST(req: NextRequest) {
     const { secret, otpauthUrl } = generateTwoFactorSecret(displayName);
 
     // Stash in pending store (5 min TTL) so /enable can verify without
-    // trusting a client-supplied secret
-    setPendingSecret(userId, secret, otpauthUrl);
+    // trusting a client-supplied secret. Store ini Redis-backed bila REDIS_URL
+    // diset (F-11), jadi /enable boleh mendarat di instance lain.
+    await setPendingSecret(userId, secret, otpauthUrl);
 
     // Render QR as data: URL (synchronous-ish; safe to await here)
     let qrCodeDataUrl: string;

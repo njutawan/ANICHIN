@@ -4,10 +4,15 @@
  * Provides:
  *  - TOTP secret generation + otpauth URL building (otplib)
  *  - TOTP token verification (±1 window = 30s drift tolerance)
- *  - One-time backup code generation (8 codes, format `XXXX-XXXX` hex)
+ *  - One-time backup code generation (8 codes, format `XXXXX-XXXXX` hex)
+ *    + normalization & bcrypt hashing (lihat src/lib/two-factor-backup.ts untuk
+ *    penyimpanan/konsumsi sekali pakai di database)
  *  - QR code rendering as a data: URL (qrcode package)
  *  - AES-256-GCM encryption for storing the TOTP secret at rest
  *
+ * Pending secret (handshake setup → enable) TIDAK lagi disimpan di modul ini:
+ * lihat src/lib/two-factor-pending.ts (Redis bila REDIS_URL diset, kalau tidak
+ * fallback in-memory).
  * Environment:
  *   TWO_FACTOR_ENCRYPTION_KEY — 64-char hex string (32 bytes).
  *   If unset in dev, a random key is generated once per process and a warning
@@ -19,6 +24,7 @@ import { logger } from '@/lib/logger';
 import { generateSecret, generateURI, verifySync } from 'otplib';
 import QRCode from 'qrcode';
 import crypto from 'crypto';
+import { compare, hash } from 'bcryptjs';
 
 const ISSUER = 'AniChin';
 
@@ -74,21 +80,71 @@ export function verifyTwoFactorToken(token: string, secret: string): boolean {
 // Backup codes
 // ---------------------------------------------------------------------------
 
+/** Panjang kode cadangan dalam hex (tanpa dash) — 5 byte = 10 hex char = 40 bit. */
+const BACKUP_CODE_HEX_LEN = 10;
+
 /**
- * Generate 8 single-use backup codes, each formatted as `XXXX-XXXX` (hex).
- * Returned to the user once during 2FA enable flow; the user must store them
- * securely. (Note: the current schema does not persist backup codes; they are
- * shown once and the verify endpoint only checks TOTP tokens for now.)
+ * Generate N single-use backup codes, masing-masing berformat `XXXXX-XXXXX`
+ * (hex). Kode dikembalikan sekali saat pembuatan (enable/regenerate) dan yang
+ * disimpan di database hanya hash bcrypt-nya — lihat src/lib/two-factor-backup.ts.
+ *
+ * Entropi 5 byte (40 bit) per kode: cukup untuk mencegah tebakan (login dengan
+ * kode cadangan tunduk pada lockout 5×/15 menit) sementara tetap bisa ditulis
+ * manual oleh pengguna. Format lama `XXXX-XXXX` (32 bit) dinaikkan di sini
+ * karena kode kini benar-benar dipakai untuk login.
  */
 export function generateBackupCodes(count = 8): string[] {
   const codes: string[] = [];
   for (let i = 0; i < count; i++) {
-    // 4 bytes = 8 hex chars → split into two halves with a dash
-    const bytes = crypto.randomBytes(4);
-    const hex = bytes.toString('hex').toUpperCase(); // 8 chars
-    codes.push(`${hex.slice(0, 4)}-${hex.slice(4, 8)}`);
+    const hex = crypto.randomBytes(BACKUP_CODE_HEX_LEN / 2).toString('hex').toUpperCase();
+    codes.push(`${hex.slice(0, 5)}-${hex.slice(5, 10)}`);
   }
   return codes;
+}
+
+/**
+ * Normalisasi kode cadangan dari input pengguna → format kanonik `XXXXX-XXXXX`.
+ *
+ * Menerima huruf kecil, spasi, dan kode tanpa dash (pengguna sering menyalin
+ * dari catatan). Mengembalikan null bila bentuknya tidak mungkin kode cadangan —
+ * pemanggil bisa memakai ini sebagai prefilter murah sebelum bcrypt compare.
+ */
+export function normalizeBackupCode(input: unknown): string | null {
+  if (typeof input !== 'string') return null;
+  const compact = input.replace(/[\s-]/g, '').toUpperCase();
+  if (compact.length !== BACKUP_CODE_HEX_LEN) return null;
+  if (!/^[0-9A-F]+$/.test(compact)) return null;
+  return `${compact.slice(0, 5)}-${compact.slice(5, 10)}`;
+}
+
+/** Apakah input berbentuk kode cadangan (tanpa menyentuh DB)? */
+export function isBackupCode(input: unknown): boolean {
+  return normalizeBackupCode(input) !== null;
+}
+
+/**
+ * Hash kode cadangan dengan bcrypt (cost 10, sama dengan password user).
+ *
+ * bcrypt dipakai karena kode cadangan hanya 40 bit — hash cepat (SHA-256) bisa
+ * di-brute-force offline dalam hitungan menit bila database bocor. Karena
+ * verifikasi berarti membandingkan kode dengan beberapa hash bcrypt (±70 ms
+ * masing-masing), jalur login dengan kode cadangan sengaja hanya dipakai saat
+ * TOTP tidak tersedia — dan tetap dibatasi lockout + rate limit.
+ */
+export async function hashBackupCodes(codes: string[]): Promise<string[]> {
+  return Promise.all(codes.map((code) => hash(code, 10)));
+}
+
+/** Cari indeks hash yang cocok dengan kode (kanonik). -1 = tidak ada yang cocok. */
+export async function matchBackupCodeHash(
+  candidate: string,
+  hashes: string[]
+): Promise<number> {
+  for (let i = 0; i < hashes.length; i++) {
+    // Bandingkan hanya setelah bentuk kode dipastikan valid di pemanggil.
+    if (await compare(candidate, hashes[i])) return i;
+  }
+  return -1;
 }
 
 // ---------------------------------------------------------------------------
@@ -203,66 +259,4 @@ export function decryptSecret(payload: string): string {
   decipher.setAuthTag(authTag);
   const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   return decrypted.toString('utf8');
-}
-
-// ---------------------------------------------------------------------------
-// In-memory pending-secret store (for the setup → enable handshake)
-// ---------------------------------------------------------------------------
-
-export interface PendingSecret {
-  secret: string;
-  otpauthUrl: string;
-  expiresAt: number;
-}
-
-const PENDING_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-// Module-level Map survives across hot reloads within the same process.
-// Keyed by user ID. For multi-instance prod deployments, swap this out for a
-// Redis-backed store (same pattern as rate-limit-store).
-const pendingSecrets = new Map<string, PendingSecret>();
-
-function sweepExpired(): void {
-  const now = Date.now();
-  for (const [k, v] of pendingSecrets.entries()) {
-    if (v.expiresAt < now) pendingSecrets.delete(k);
-  }
-}
-
-/**
- * Stash a freshly generated TOTP secret for a user, valid for 5 minutes.
- * The user must call /enable with a valid 6-digit token before the TTL expires.
- */
-export function setPendingSecret(
-  userId: string,
-  secret: string,
-  otpauthUrl: string
-): void {
-  sweepExpired();
-  pendingSecrets.set(userId, {
-    secret,
-    otpauthUrl,
-    expiresAt: Date.now() + PENDING_TTL_MS,
-  });
-}
-
-/**
- * Retrieve (without removing) the pending secret for a user.
- * Returns null if no entry exists or it has expired.
- */
-export function getPendingSecret(userId: string): PendingSecret | null {
-  const entry = pendingSecrets.get(userId);
-  if (!entry) return null;
-  if (entry.expiresAt < Date.now()) {
-    pendingSecrets.delete(userId);
-    return null;
-  }
-  return entry;
-}
-
-/**
- * Remove the pending secret after a successful enable (or user cancel).
- */
-export function clearPendingSecret(userId: string): void {
-  pendingSecrets.delete(userId);
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -22,6 +22,37 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [emailError, setEmailError] = useState('');
 
+  /**
+   * Pesan penolakan dari jalur OAuth (NextAuth mengalihkan ke
+   * /auth/login?error=<kode>). Kode seperti OAuthEmailNotVerified /
+   * UsePasswordLogin berasal dari callback `signIn` (kebijakan penautan akun,
+   * audit F-07/F-19) — tanpa ini pengguna hanya melihat halaman login tanpa
+   * penjelasan kenapa tombol Google/GitHub tidak bekerja.
+   *
+   * Dibaca dari `window.location` (bukan useSearchParams) supaya halaman tidak
+   * butuh Suspense boundary saat di-prerender.
+   */
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('error');
+    if (!code) return;
+
+    const messages: Record<string, string> = {
+      OAuthEmailNotVerified:
+        'Google/GitHub belum memverifikasi email akun itu. Masuk pakai email + password, atau pakai akun dengan email yang sudah diverifikasi.',
+      UsePasswordLogin:
+        'Akun ini memakai 2FA. Masuk pakai email + password + kode autentikator (login Google/GitHub tidak melewati 2FA).',
+      AccessDenied: 'Akses ditolak untuk akun itu.',
+      OAuthAccountNotLinked: 'Email itu sudah terdaftar. Masuk dulu dengan cara sebelumnya.',
+      Configuration: 'Konfigurasi login di server belum lengkap.',
+    };
+    const message = messages[code];
+    if (message) toast.error(message);
+
+    // Buang parameter error dari URL supaya refresh tidak memunculkan ulang.
+    window.history.replaceState({}, '', window.location.pathname);
+  }, []);
+
   // Inline email validation
   const validateEmail = (val: string) => {
     setEmail(val);
@@ -37,15 +68,27 @@ export default function LoginPage() {
     return email && password && !emailError && password.length >= 6;
   }, [email, password, emailError]);
 
+  /**
+   * Faktor kedua yang diterima di langkah 2FA:
+   *   - kode TOTP 6 digit dari authenticator, atau
+   *   - kode cadangan `XXXXX-XXXXX` (dash opsional) untuk pengguna yang
+   *     kehilangan authenticator. Kode cadangan disimpan sebagai hash dan
+   *     sekali pakai (F-10) — server yang memverifikasi & mengonsumsinya.
+   */
+  const cleanTotp = totp.trim().toUpperCase();
+  const secondFactorValid =
+    /^\d{6}$/.test(cleanTotp) || /^[0-9A-F]{5}-?[0-9A-F]{5}$/.test(cleanTotp);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isFormValid && step === 'credentials') return;
+    if (step === '2fa' && !secondFactorValid) return;
     setLoading(true);
 
     const res = await signIn('credentials', {
       email,
       password,
-      totp: step === '2fa' ? totp : undefined,
+      totp: step === '2fa' ? cleanTotp : undefined,
       redirect: false,
     });
 
@@ -53,22 +96,32 @@ export default function LoginPage() {
 
     if (res?.error && step === 'credentials') {
       try {
+        // Endpoint ini hanya melaporkan apakah akun butuh langkah 2FA
+        // (tidak lagi memverifikasi kode — verifikasi TOTP terjadi di dalam
+        // alur signIn/NextAuth yang dilindungi lockout; lihat
+        // src/app/api/auth/2fa/verify/route.ts).
         const probe = await fetch('/api/auth/2fa/verify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, token: '000000' }),
+          body: JSON.stringify({ email }),
         });
         const data = await probe.json();
         if (data.requiresTwoFactor) {
           setStep('2fa');
-          toast.info('Akun kamu memiliki 2FA aktif. Masukkan kode dari authenticator app.');
+          toast.info(
+            'Akun kamu memiliki 2FA aktif. Masukkan kode authenticator — atau salah satu kode cadangan.'
+          );
           return;
         }
       } catch { /* ignore */ }
     }
 
     if (res?.error) {
-      toast.error(step === '2fa' ? 'Kode 2FA tidak valid' : 'Email atau password salah');
+      toast.error(
+        step === '2fa'
+          ? 'Kode 2FA / kode cadangan tidak valid'
+          : 'Email atau password salah'
+      );
     } else {
       toast.success('Login berhasil');
       router.push('/');
@@ -87,7 +140,7 @@ export default function LoginPage() {
           <p className="text-sm text-foreground/70 mt-1">
             {step === 'credentials'
               ? 'Login buat simpan bookmark & kasih ulasan'
-              : 'Masukkan kode 6-digit dari authenticator app'}
+              : 'Masukkan kode 6-digit dari authenticator, atau kode cadangan'}
           </p>
         </div>
 
@@ -185,28 +238,38 @@ export default function LoginPage() {
               </div>
               <div className="space-y-1.5">
                 <label htmlFor="totp" className="text-sm font-medium text-foreground/80">
-                  Kode 2FA
+                  Kode 2FA atau kode cadangan
                 </label>
                 <div className="relative">
                   <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-foreground/40" />
                   <Input
                     id="totp"
                     type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    maxLength={6}
+                    inputMode="text"
+                    maxLength={11}
                     placeholder="000000"
                     value={totp}
-                    onChange={(e) => setTotp(e.target.value.replace(/\D/g, ''))}
-                    className="pl-9 text-center tracking-[0.5em] text-lg"
+                    onChange={(e) =>
+                      setTotp(
+                        e.target.value.toUpperCase().replace(/[^0-9A-F-]/g, '').slice(0, 11)
+                      )
+                    }
+                    className="pl-9 text-center tracking-[0.3em] text-lg"
+                    autoComplete="one-time-code"
+                    spellCheck={false}
                     required
                     autoFocus
                   />
                 </div>
+                <p className="text-xs text-foreground/50">
+                  Kehilangan authenticator? Pakai salah satu kode cadangan
+                  (format <span className="font-mono">XXXXX-XXXXX</span>, sekali
+                  pakai).
+                </p>
               </div>
               <Button
                 type="submit"
-                disabled={loading || totp.length !== 6}
+                disabled={loading || !secondFactorValid}
                 className="w-full bg-amber-500 text-black hover:bg-amber-400 font-bold h-11"
               >
                 {loading ? (

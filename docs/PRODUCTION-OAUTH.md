@@ -69,12 +69,17 @@ openssl rand -base64 32
 # Example output: K9x2mP7vQ4wL8nR3tB6yF1hJ5kD0gH9sZ+abc123=
 
 # TWO_FACTOR_ENCRYPTION_KEY — for encrypting 2FA secrets at rest
-openssl rand -base64 32
-# Example output: M4nB7vC2xZ9pQ1rT6sL8wE3yJ5kD0fG7h+xyz789=
+# WAJIB 64 hex chars (AES-256-GCM); base64/44 char DITOLAK validator.
+openssl rand -hex 32
+# Example output: 3f9c1a7d2b8e4506c1d9f3a7b2e85091c4d7a0f6b3e2914d8c5a70f1e6b3d924
 
-# POSTGRES_PASSWORD — for production database
+# POSTGRES_PASSWORD — role migrasi/owner database (hak DDL)
 openssl rand -base64 24 | tr -d '/+=' | head -c 32
 # Example output: Xk9Pm2QvR7sT3wB6nF1hJ5kD0gH9sZ
+
+# POSTGRES_APP_PASSWORD — role aplikasi (DML saja) untuk service `web` (F-16)
+openssl rand -hex 32
+# Example output: 8a1f0c73d95b2e6417ab3ce8051f9d26b47c0e9182fa53d61c8b0e7a2d4f69b3
 ```
 
 **Save these securely** — if lost, all user sessions will be invalidated.
@@ -217,7 +222,7 @@ GITHUB_CLIENT_ID=Iv1.abcdefghijkl
 GITHUB_CLIENT_SECRET=abcdefghijklmnopqrstuvwxyz1234567890abcdef
 
 # 2FA encryption
-TWO_FACTOR_ENCRYPTION_KEY=M4nB7vC2xZ9pQ1rT6sL8wE3yJ5kD0fG7h+xyz789=
+TWO_FACTOR_ENCRYPTION_KEY=3f9c1a7d2b8e4506c1d9f3a7b2e85091c4d7a0f6b3e2914d8c5a70f1e6b3d924
 ```
 
 Restart the server:
@@ -238,7 +243,7 @@ gh secret set GOOGLE_CLIENT_ID --body "123456789012-abcdefghijklmnopqrstuvwxyz.a
 gh secret set GOOGLE_CLIENT_SECRET --body "GOCSPX-abcdefghijklmnopqrstuvwxyz123456"
 gh secret set OAUTH_GITHUB_CLIENT_ID --body "Iv1.abcdefghijkl"
 gh secret set OAUTH_GITHUB_CLIENT_SECRET --body "abcdefghijklmnopqrstuvwxyz1234567890abcdef"
-gh secret set TWO_FACTOR_ENCRYPTION_KEY --body "M4nB7vC2xZ9pQ1rT6sL8wE3yJ5kD0fG7h+xyz789="
+gh secret set TWO_FACTOR_ENCRYPTION_KEY --body "$(openssl rand -hex 32)"
 ```
 
 The CI/CD pipeline (`deploy.yml`) automatically validates these secrets are set before deploying.
@@ -508,7 +513,7 @@ GITHUB_CLIENT_ID=<from GitHub Developer Settings>
 GITHUB_CLIENT_SECRET=<from GitHub Developer Settings>
 
 # 2FA encryption (optional but recommended)
-TWO_FACTOR_ENCRYPTION_KEY=<32+ char random string>
+TWO_FACTOR_ENCRYPTION_KEY=<64 hex chars: openssl rand -hex 32>
 ```
 
 ### Callback URLs

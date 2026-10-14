@@ -14,7 +14,15 @@ export const revalidate = 0;
  *   200 OK — service healthy (DB reachable, memory OK)
  *   503    — service unhealthy (DB down or other critical failure)
  *
- * Response body: { status, uptime, timestamp, version, environment, checks }
+ * Response body: { status, uptime, timestamp, checks }
+ *
+ * F-13 (docs/SECURITY-AUDIT.md): endpoint ini publik dan tanpa auth, jadi
+ * isinya dibatasi ke yang benar-benar dipakai monitoring:
+ *   - `version` dan `environment` DIHAPUS — keduanya memberi penyerang peta
+ *     versi (CVE yang berlaku) dan menandai apakah instance ini staging/produksi.
+ *   - RSS proses kini dilaporkan sebagai `rssMb` (angka yang jelas), bukan
+ *     diselipkan ke field `latencyMs` (menyesatkan: latensi vs byte).
+ *   - status Redis cukup `{ status, configured }` tanpa latensi palsu (0/1).
  *
  * No rate limiting — load balancers poll this frequently.
  */
@@ -43,20 +51,26 @@ export async function GET() {
   const mem = process.memoryUsage();
   const memLimitMB = Number(process.env.MAX_MEMORY_MB ?? '3072');
   const memLimit = memLimitMB * 1024 * 1024;
-  checks.memory = {
-    status: mem.rss < memLimit ? 'ok' : 'fail',
-    latencyMs: mem.rss,
+  const memory = {
+    status: (mem.rss < memLimit ? 'ok' : 'fail') as 'ok' | 'fail',
+    // F-13: angka RSS yang jujur (MB), bukan disamarkan sebagai `latencyMs`.
+    rssMb: Math.round(mem.rss / (1024 * 1024)),
   };
 
   // --- Redis check (rate limiter backend) ---
   const redisHealth = await checkRedisHealth();
-  checks.redis = {
-    status: !redisHealth.configured || redisHealth.connected ? 'ok' : 'fail',
-    latencyMs: redisHealth.configured ? (redisHealth.connected ? 1 : 0) : 0,
+  const redis = {
+    status: (!redisHealth.configured || redisHealth.connected
+      ? 'ok'
+      : 'fail') as 'ok' | 'fail',
+    configured: redisHealth.configured,
   };
 
   // --- Overall status ---
-  const allOk = Object.values(checks).every((c) => c.status === 'ok');
+  const allOk =
+    Object.values(checks).every((c) => c.status === 'ok') &&
+    memory.status === 'ok' &&
+    redis.status === 'ok';
   const status = allOk ? 'ok' : 'unhealthy';
   const httpStatus = allOk ? 200 : 503;
 
@@ -65,9 +79,11 @@ export async function GET() {
       status,
       uptime: Math.round(process.uptime()),
       timestamp: new Date().toISOString(),
-      version: process.env.npm_package_version ?? '1.0.0',
-      environment: process.env.NODE_ENV ?? 'development',
-      checks,
+      checks: {
+        ...checks,
+        memory,
+        redis,
+      },
     },
     {
       status: httpStatus,

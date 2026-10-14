@@ -1,6 +1,10 @@
 # ============================================================================
 # AniChin — Docker Compose (Production)
-# Services: web + db (PostgreSQL 16) + redis + migrate + backup-cron + caddy
+# Services: web + db (PostgreSQL 16) + redis + migrate + db-roles + backup-cron + caddy
+#
+# F-16 — dua role database, dua kredensial:
+#   migrate/backup-cron → `anichin`      (owner, hak DDL)  → POSTGRES_PASSWORD
+#   web                 → `anichin_app`  (DML saja)        → POSTGRES_APP_PASSWORD
 #
 # Dua cara menjalankan (keduanya memakai tag image yang sama):
 #   A. Server dengan source repo (build lokal):
@@ -30,8 +34,15 @@ services:
     restart: unless-stopped
     environment:
       - POSTGRES_DB=anichin
+      # Role MIGRASI/owner: pemilik database, punya hak DDL. Dipakai hanya oleh
+      # service `migrate` (prisma migrate deploy) dan `backup-cron` (pg_dump).
       - POSTGRES_USER=anichin
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      # F-16: role APLIKASI (DML saja) untuk service `web` — bug di aplikasi
+      # tidak lagi bisa DROP/ALTER/TRUNCATE tabel. Dibuat oleh
+      # scripts/postgres-init/10-app-role.sh.
+      - POSTGRES_APP_USER=anichin_app
+      - POSTGRES_APP_PASSWORD=${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD is required (role aplikasi DML-only; generate: openssl rand -hex 32)}
       # Performance tuning (adjust based on host RAM)
       - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --locale=C.UTF-8
     # Catatan: WAL archiving (`wal_level=replica` + `archive_mode=on` +
@@ -65,6 +76,11 @@ services:
       - "127.0.0.1:5432:5432"  # Only bind to localhost — never expose publicly
     volumes:
       - db_data:/var/lib/postgresql/data
+      # F-16: pembuat role aplikasi. Entrypoint postgres menjalankannya otomatis
+      # saat data dir masih kosong; untuk DB yang sudah ada,
+      # scripts/compose-deploy.sh memanggilnya lewat `docker compose exec`
+      # (idempoten) sebelum stack di-up.
+      - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U anichin -d anichin"]
       interval: 10s
@@ -137,12 +153,47 @@ services:
       - .env
     environment:
       - NODE_ENV=production
+      # F-16: role migrasi (owner) — butuh DDL untuk membuat/mengubah tabel.
+      # Kredensial ini TIDAK dipakai service `web`.
       - DATABASE_URL=postgresql://anichin:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/anichin?schema=public
     depends_on:
       db:
         condition: service_healthy
     networks:
       - anichin-network
+
+  # ─────────────────────────────────────────────────────────────
+  # db-roles — pastikan role aplikasi (DML saja) ada & sinkron (F-16)
+  # Dijalankan setiap `up` dan idempoten. Diperlukan karena skrip initdb
+  # di entrypoint postgres hanya jalan pada VOLUME YANG MASIH KOSONG:
+  # database yang sudah ada (hasil deploy sebelum pemisahan role) tidak akan
+  # punya role aplikasi, dan tanpa langkah ini `web` akan gagal konek.
+  # Urutannya setelah `migrate` supaya tabel baru sekaligus tercakup GRANT
+  # eksplisit (selain ALTER DEFAULT PRIVILEGES).
+  # ─────────────────────────────────────────────────────────────
+  db-roles:
+    image: postgres:16-alpine
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      - PGHOST=db
+      - PGPORT=5432
+      - POSTGRES_DB=anichin
+      - POSTGRES_USER=anichin
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - PGPASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - POSTGRES_APP_USER=anichin_app
+      - POSTGRES_APP_PASSWORD=${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD is required (role aplikasi DML-only)}
+    entrypoint: ["sh", "/docker-entrypoint-initdb.d/10-app-role.sh"]
+    volumes:
+      - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - anichin-network
+
 
   # ─────────────────────────────────────────────────────────────
   # web — Next.js 16 standalone production server
@@ -174,7 +225,10 @@ services:
       - .env
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgresql://anichin:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/anichin?schema=public
+      # F-16: aplikasi memakai role DML-only (bukan owner DB). Tanpa
+      # POSTGRES_APP_PASSWORD compose menolak start — sengaja, supaya deployment
+      # tidak diam-diam kembali memakai role owner.
+      - DATABASE_URL=postgresql://anichin_app:${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD is required (role aplikasi DML-only)}@db:5432/anichin?schema=public
       - REDIS_URL=redis://redis:6379
       - NEXTAUTH_URL=${NEXTAUTH_URL:?NEXTAUTH_URL is required}
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:?NEXTAUTH_SECRET is required}
@@ -187,6 +241,9 @@ services:
       redis:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      # F-16: `web` hanya start setelah role aplikasi dipastikan ada.
+      db-roles:
         condition: service_completed_successfully
     volumes:
       # Named volume, BUKAN bind mount ./logs:/app/logs: bind mount mewarisi
@@ -220,6 +277,8 @@ services:
     restart: unless-stopped
     environment:
       - PGHOST=db
+      # F-16: pg_dump harus bisa membaca SEMUA objek, jadi tetap role owner —
+      # bukan role aplikasi DML-only.
       - PGUSER=anichin
       - PGPASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       - PGDATABASE=anichin

@@ -1,21 +1,70 @@
+/**
+ * POST /api/auth/register — buat akun baru.
+ *
+ * F-12: respons untuk "email baru" dan "email sudah terdaftar" **identik**
+ * (`201 { registered: true }`) supaya endpoint ini tidak bisa dipakai untuk
+ * memeriksa apakah sebuah email punya akun. Notifikasi dikirim ke alamat email
+ * yang bersangkutan, bukan ke pendaftar.
+ */
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { hashSync, isValidEmail } from '@/lib/auth';
 import { checkRateLimit, addRateLimitHeaders } from '@/lib/rate-limit';
-import { sanitizeDisplayName } from '@/lib/security';
+import { logger } from '@/lib/logger';
+import { sanitizeDisplayName, PASSWORD_MAX_BYTES, isPasswordTooLong } from '@/lib/security';
+import { sendAccountExistsEmail } from '@/lib/email';
 
 // Validation constants
 const NAME_MIN = 2;
 const NAME_MAX = 30;
 const PASS_MIN = 6;
-const PASS_MAX = 128;
+/** Batas keras jumlah karakter (jaga-jaga sebelum cek byte; lihat F-17). */
+const PASS_MAX_CHARS = 128;
 
-// Password strength: must have at least one letter and one number
+/**
+ * Password strength: minimal 6 karakter, harus ada huruf dan angka, dan
+ * maksimal `PASSWORD_MAX_BYTES` (72) byte UTF-8 — batas bcrypt (F-17).
+ */
 function isPasswordStrongEnough(pwd: string): boolean {
-  if (pwd.length < PASS_MIN || pwd.length > PASS_MAX) return false;
+  if (pwd.length < PASS_MIN || pwd.length > PASS_MAX_CHARS) return false;
+  if (isPasswordTooLong(pwd)) return false;
   const hasLetter = /[a-zA-Z]/.test(pwd);
   const hasNumber = /[0-9]/.test(pwd);
   return hasLetter && hasNumber;
+}
+
+/**
+ * Respons pendaftaran yang SELALU sama (F-12).
+ *
+ * Tidak lagi mengembalikan `{ id, email, name, createdAt }` karena objek user
+ * hanya ada pada satu cabang — perbedaan bentuk itulah yang membocorkan apakah
+ * email sudah terdaftar. Klien (halaman /auth/register) setelah ini mencoba
+ * `signIn('credentials')`: akun baru langsung masuk, sedangkan email yang sudah
+ * ada hanya bisa masuk bila passwordnya memang benar.
+ */
+function registeredResponse(): NextResponse {
+  return addRateLimitHeaders(
+    NextResponse.json({ registered: true }, { status: 201 }),
+    'expensive'
+  );
+}
+
+/**
+ * Kirim email "email ini sudah terdaftar" (best-effort).
+ *
+ * Kegagalan pengiriman tidak boleh mengubah respons maupun menggagalkan
+ * pendaftaran — kalau SMTP belum dikonfigurasi, `deliverEmail` hanya mencatat
+ * di server (tanpa token, jadi aman) dan fungsi ini tetap selesai.
+ */
+async function notifyAccountExists(email: string): Promise<void> {
+  const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+  try {
+    await sendAccountExistsEmail(email, `${baseUrl}/auth/login`);
+  } catch (err) {
+    logger.warn('[register] gagal mengirim notifikasi email terdaftar', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -72,6 +121,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Panjang password dalam BYTE, bukan karakter (F-17): bcrypt hanya memakai
+    // 72 byte pertama dan diam-diam mengabaikan sisanya — jadi password yang
+    // lebih panjang dari itu tidak menambah keamanan sama sekali.
+    if (isPasswordTooLong(password)) {
+      return NextResponse.json(
+        {
+          error: `Password terlalu panjang (maksimal ${PASSWORD_MAX_BYTES} byte; karakter non-ASCII dihitung lebih dari satu).`,
+        },
+        { status: 400 }
+      );
+    }
+
     // Validate password strength
     if (!isPasswordStrongEnough(password)) {
       return NextResponse.json(
@@ -82,17 +143,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Check duplicate email (race-safe via unique constraint, but pre-check for UX)
+    // Cek duplikat email — HANYA untuk memutuskan kirim notifikasi, bukan untuk
+    // membentuk respons (F-12). Pendaftar tidak boleh bisa membedakan "email
+    // baru" dari "email sudah terdaftar" lewat status/body/error, karena itu
+    // jalur enumerasi akun. Pemilik email yang sah diberi tahu lewat email.
     const existing = await db.user.findUnique({
       where: { email: normalizedEmail },
       select: { id: true },
     });
     if (existing) {
-      // Generic message — don't leak which emails exist
-      return NextResponse.json(
-        { error: 'Email sudah terdaftar.' },
-        { status: 409 }
-      );
+      await notifyAccountExists(normalizedEmail);
+      return registeredResponse();
     }
 
     // Hash password (cost 10 — balance security vs perf)
@@ -101,36 +162,25 @@ export async function POST(req: NextRequest) {
     // Sanitize display name (strip any HTML)
     const safeName = sanitizeDisplayName(trimmedName);
 
-    // Create user — if email race-condition occurs, unique constraint throws
-    const user = await db.user.create({
+    // Create user — if email race-condition occurs, unique constraint throws.
+    // Hasilnya tidak dipakai di respons (respons sengaja seragam, F-12).
+    await db.user.create({
       data: { email: normalizedEmail, name: safeName, password: hashedPassword },
-      select: { id: true, email: true, name: true, createdAt: true },
+      select: { id: true },
     });
 
-    return addRateLimitHeaders(
-      NextResponse.json(
-        {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          createdAt: user.createdAt,
-        },
-        { status: 201 }
-      ),
-      'expensive'
-    );
+    return registeredResponse();
   } catch (err: unknown) {
-    // Prisma unique constraint violation (P2002) — email race condition
+    // Prisma unique constraint violation (P2002) — balapan dua pendaftaran
+    // dengan email sama. Responsnya WAJIB sama dengan jalur sukses (F-12),
+    // kalau tidak, 409 tetap membocorkan keberadaan email.
     if (
       err &&
       typeof err === 'object' &&
       'code' in err &&
       (err as { code: string }).code === 'P2002'
     ) {
-      return NextResponse.json(
-        { error: 'Email sudah terdaftar.' },
-        { status: 409 }
-      );
+      return registeredResponse();
     }
     // Don't leak internal errors
     return NextResponse.json(

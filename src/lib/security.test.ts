@@ -11,6 +11,10 @@ import {
   sanitizeDisplayName,
   sanitizeComment,
   sanitizeUserText,
+  sanitizeMediaUrl,
+  PASSWORD_MAX_BYTES,
+  utf8ByteLength,
+  isPasswordTooLong,
 } from '@/lib/security';
 
 describe('sanitizeForJSONLD', () => {
@@ -161,5 +165,70 @@ describe('sanitasi multi-karakter stabil (alert CodeQL #1 & #6)', () => {
 
   it('sanitizeUserText membuang tag sekali jalan untuk input normal', () => {
     expect(sanitizeUserText('<b>Halo</b> <script>alert(1)</script> dunia', 500)).toBe('Halo alert(1) dunia');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-14 — validasi URL media admin (poster/banner/trailer)
+// ---------------------------------------------------------------------------
+
+describe('sanitizeMediaUrl (audit F-14)', () => {
+  it('menerima URL http/https absolut', () => {
+    expect(sanitizeMediaUrl('https://cdn.example.com/poster.jpg')).toBe(
+      'https://cdn.example.com/poster.jpg'
+    );
+    expect(sanitizeMediaUrl('http://example.com/a.png')).toBe('http://example.com/a.png');
+    expect(sanitizeMediaUrl('  https://example.com/x.jpg  ')).toBe('https://example.com/x.jpg');
+  });
+
+  it('menerima path internal situs', () => {
+    expect(sanitizeMediaUrl('/images/poster.jpg')).toBe('/images/poster.jpg');
+  });
+
+  it('menolak skema berbahaya dan bentuk yang tidak terkontrol', () => {
+    for (const bad of [
+      'javascript:alert(1)',
+      'JavaScript:alert(1)',
+      'data:image/svg+xml;base64,PHN2Zz4=',
+      'vbscript:msgbox(1)',
+      'file:///etc/passwd',
+      '#fragmen',
+      '//evil.example.com/poster.jpg',
+      'bukan url',
+      '',
+      '   ',
+      null,
+      undefined,
+      123,
+    ]) {
+      expect(sanitizeMediaUrl(bad as unknown)).toBeNull();
+    }
+  });
+
+  it('menolak nilai yang terlalu panjang', () => {
+    const long = `https://example.com/${'a'.repeat(2000)}.jpg`;
+    expect(sanitizeMediaUrl(long)).toBeNull();
+    expect(sanitizeMediaUrl(`https://example.com/${'a'.repeat(50)}.jpg`, 40)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-17 — batas bcrypt 72 byte
+// ---------------------------------------------------------------------------
+
+describe('batas panjang password bcrypt (audit F-17)', () => {
+  it('menghitung byte UTF-8, bukan jumlah karakter', () => {
+    expect(utf8ByteLength('abc')).toBe(3);
+    expect(utf8ByteLength('é')).toBe(2);
+    expect(utf8ByteLength('漢')).toBe(3);
+    expect(utf8ByteLength('🎬')).toBe(4);
+  });
+
+  it('72 byte masih boleh, 73 byte tidak', () => {
+    expect(PASSWORD_MAX_BYTES).toBe(72);
+    expect(isPasswordTooLong('a'.repeat(72))).toBe(false);
+    expect(isPasswordTooLong('a'.repeat(73))).toBe(true);
+    expect(isPasswordTooLong('é'.repeat(36))).toBe(false); // 72 byte
+    expect(isPasswordTooLong('é'.repeat(37))).toBe(true); // 74 byte
   });
 });

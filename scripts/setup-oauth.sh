@@ -287,7 +287,7 @@ if [ -z "$TWO_FACTOR_KEY" ] || [[ "$TWO_FACTOR_KEY" == *"REPLACE"* ]]; then
     print_info "This key encrypts user 2FA secrets at rest. Generate one now."
     read -p "Generate TWO_FACTOR_ENCRYPTION_KEY? (Y/n): " gen_2fa
     if [[ "${gen_2fa:-Y}" =~ ^[Yy]$ ]]; then
-        TWO_FACTOR_KEY=$(openssl rand -base64 32)
+        TWO_FACTOR_KEY=$(openssl rand -hex 32)  # 64 hex char — base64 DITOLAK validator 2FA
         sed -i.bak "s|^TWO_FACTOR_ENCRYPTION_KEY=.*|TWO_FACTOR_ENCRYPTION_KEY=$TWO_FACTOR_KEY|" "$ENV_FILE"
         rm -f "$ENV_FILE.bak"
         print_success "Generated TWO_FACTOR_ENCRYPTION_KEY"

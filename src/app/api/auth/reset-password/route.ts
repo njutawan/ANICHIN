@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { hashSync } from '@/lib/auth';
+import { PASSWORD_MAX_BYTES, isPasswordTooLong } from '@/lib/security';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { logger } from '@/lib/logger';
 
@@ -54,8 +55,18 @@ export async function POST(req: NextRequest) {
     }
 
     // 5. Password strength validation (same as register)
-    if (password.length < 6 || password.length > 1024) {
-      return NextResponse.json({ error: 'Password harus 6-1024 karakter.' }, { status: 400 });
+    // F-17: batas bcrypt = 72 BYTE, bukan karakter. Password 1024 karakter hanya
+    // membuat pengguna merasa aman: bcrypt mengabaikan byte ke-73 dan seterusnya.
+    if (isPasswordTooLong(password)) {
+      return NextResponse.json(
+        {
+          error: `Password terlalu panjang (maksimal ${PASSWORD_MAX_BYTES} byte; karakter non-ASCII dihitung lebih dari satu).`,
+        },
+        { status: 400 }
+      );
+    }
+    if (password.length < 6) {
+      return NextResponse.json({ error: 'Password minimal 6 karakter.' }, { status: 400 });
     }
     if (!/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) {
       return NextResponse.json({ error: 'Password harus mengandung huruf dan angka.' }, { status: 400 });
@@ -92,10 +103,19 @@ export async function POST(req: NextRequest) {
     const hashedPassword = hashSync(password, 10);
 
     // 8. Update user password + mark token as used (transaction)
+    //
+    // `sessionVersion` dinaikkan bersamaan: semua JWT yang sudah terbit (termasuk
+    // milik penyerang yang mencuri cookie, atau sesi yang membuat reset ini
+    // karena akun diambil alih) langsung dicabut oleh `jwt` callback di
+    // src/lib/auth.ts. Sebelumnya reset password hanya mengganti hash — sesi
+    // lama tetap hidup sampai 7 hari.
     await db.$transaction([
       db.user.update({
         where: { id: resetRecord.userId },
-        data: { password: hashedPassword },
+        data: {
+          password: hashedPassword,
+          sessionVersion: { increment: 1 },
+        },
       }),
       db.passwordReset.update({
         where: { token },

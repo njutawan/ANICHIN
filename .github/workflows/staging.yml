@@ -102,6 +102,41 @@ jobs:
           build-args: |
             DATABASE_PROVIDER=postgresql
 
+      # ── SSH dengan host key dipin (F-15) ────────────────────
+      # Sama seperti deploy produksi: ssh-keyscan + StrictHostKeyChecking=no
+      # membuat runner mempercayai kunci apa pun yang menjawab di DEPLOY_HOST,
+      # padahal langkah berikutnya mengirim .env (rahasia sesi/OAuth) ke sana.
+      - name: 🔐 Siapkan SSH (host key dipin dari secret)
+        if: steps.preflight.outputs.deploy == 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.STAGING_DEPLOY_HOST }}
+          DEPLOY_KEY: ${{ secrets.STAGING_DEPLOY_SSH_KEY }}
+          DEPLOY_HOST_KEY: ${{ secrets.STAGING_DEPLOY_HOST_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_HOST_KEY" ]; then
+            echo "::error title=Host key SSH belum dipin::STAGING_DEPLOY_HOST terisi tetapi secret STAGING_DEPLOY_HOST_KEY kosong. Ambil di mesin tepercaya: 'ssh-keyscan -H <host>', cocokkan fingerprint-nya dengan kunci server, lalu simpan sebagai secret STAGING_DEPLOY_HOST_KEY (lihat docs/DEPLOYMENT.md langkah 8)."
+            exit 1
+          fi
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::error title=Kunci SSH staging kosong::secret STAGING_DEPLOY_SSH_KEY kosong."
+            exit 1
+          fi
+
+          umask 077
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          if ! ssh-keygen -F "$DEPLOY_HOST" -f ~/.ssh/known_hosts > /dev/null \
+             && ! grep -qF "$DEPLOY_HOST" ~/.ssh/known_hosts; then
+            echo "::error title=STAGING_DEPLOY_HOST_KEY tidak memuat host::secret tidak memuat entri untuk '$DEPLOY_HOST'."
+            exit 1
+          fi
+          echo "🔐 Host key dipin untuk $DEPLOY_HOST:"
+          ssh-keygen -lf ~/.ssh/known_hosts
+
       - name: 📤 Upload compose + scripts ke server
         if: steps.preflight.outputs.deploy == 'true'
         env:
@@ -111,22 +146,21 @@ jobs:
           APP_DIR: /opt/anichin-staging
         run: |
           set -euo pipefail
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-
-          mkdir -p deploy-bundle/scripts
+          mkdir -p deploy-bundle/scripts/postgres-init
           cp docker-compose.staging.yml deploy-bundle/
           cp scripts/compose-deploy.sh scripts/deploy-env.sh scripts/backup-db.sh scripts/restore-db.sh deploy-bundle/scripts/
-          chmod +x deploy-bundle/scripts/*.sh
+          # F-16: pembuat role aplikasi DML-only (sama seperti produksi).
+          cp scripts/postgres-init/10-app-role.sh deploy-bundle/scripts/postgres-init/
+          chmod +x deploy-bundle/scripts/*.sh deploy-bundle/scripts/postgres-init/*.sh
 
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$APP_DIR/scripts'"
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -q \
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$APP_DIR/scripts/postgres-init'"
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -q \
             deploy-bundle/docker-compose.staging.yml "$DEPLOY_USER@$DEPLOY_HOST:$APP_DIR/"
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -q \
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -q \
             deploy-bundle/scripts/*.sh "$DEPLOY_USER@$DEPLOY_HOST:$APP_DIR/scripts/"
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -q \
+            deploy-bundle/scripts/postgres-init/*.sh "$DEPLOY_USER@$DEPLOY_HOST:$APP_DIR/scripts/postgres-init/"
 
       - name: ⚙️ Bootstrap .env staging (opsional)
         if: steps.preflight.outputs.deploy == 'true'
@@ -137,17 +171,14 @@ jobs:
           APP_DIR: /opt/anichin-staging
           REGISTRY: ${{ secrets.REGISTRY }}
           POSTGRES_PASSWORD: ${{ secrets.STAGING_POSTGRES_PASSWORD }}
+          # F-16: kredensial role aplikasi (DML-only) — wajib diisi compose staging.
+          POSTGRES_APP_PASSWORD: ${{ secrets.STAGING_POSTGRES_APP_PASSWORD }}
           NEXTAUTH_SECRET: ${{ secrets.STAGING_NEXTAUTH_SECRET }}
           NEXTAUTH_URL: ${{ secrets.STAGING_NEXTAUTH_URL }}
           ANICHIN_IMAGE: ${{ secrets.REGISTRY }}/anichin:staging-current
           ANICHIN_MIGRATE_IMAGE: ${{ secrets.REGISTRY }}/anichin:staging-migrate
         run: |
           set -euo pipefail
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-
           # Registry kosong → jangan tulis ANICHIN_IMAGE (biar compose memakai
           # default-nya sendiri dan build lokal).
           if [ -z "${REGISTRY:-}" ]; then
@@ -156,10 +187,11 @@ jobs:
           fi
 
           # shellcheck disable=SC2087  # ekspansi sengaja di runner (lihat deploy.yml)
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "cd '$APP_DIR' && ENV_FILE='$APP_DIR/.env' ./scripts/deploy-env.sh" <<EOF
           POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+          POSTGRES_APP_PASSWORD=$POSTGRES_APP_PASSWORD
           NEXTAUTH_SECRET=$NEXTAUTH_SECRET
           NEXTAUTH_URL=$NEXTAUTH_URL
           ANICHIN_IMAGE=$ANICHIN_IMAGE
@@ -176,12 +208,7 @@ jobs:
           SKIP_PULL: ${{ steps.preflight.outputs.registry == 'true' && '0' || '1' }}
         run: |
           set -euo pipefail
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "APP_DIR='$APP_DIR' ENVIRONMENT='staging' COMPOSE_FILE='docker-compose.staging.yml' SKIP_PULL='$SKIP_PULL' bash -s" <<'REMOTE'
           set -euo pipefail

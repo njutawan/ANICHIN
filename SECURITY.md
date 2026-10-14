@@ -136,10 +136,47 @@ Aktivitas di atas **tidak** memberi izin untuk menguji instance produksi
 
 Supaya laporan tidak tumpang tindih dengan hal yang sudah disengaja, ringkasan
 kontrol yang sudah terpasang ada di tabel **"Yang sudah bagus"** pada
-[`docs/CODE-REVIEW.md`](./docs/CODE-REVIEW.md) — antara lain: CSP berbasis nonce,
-11 security header di `src/proxy.ts`, 2FA TOTP + backup code terenkripsi
-AES-256-GCM, rate limiting 3 tingkat + lockout login, audit log ber-`IP_HASH_SALT`,
-`bun audit --production` yang memblokir CI, serta validasi input terpusat (Zod).
+[`docs/CODE-REVIEW.md`](./docs/CODE-REVIEW.md) dan di
+[`docs/SECURITY-AUDIT.md`](./docs/SECURITY-AUDIT.md) (audit 19 titik: secret,
+env, error, validasi, XSS/SQLi, auth server-side, role admin, DB, hash password,
+sesi, reset password, upload). Ringkasnya: CSP berbasis nonce, security header di
+`src/proxy.ts`, 2FA TOTP dengan secret terenkripsi AES-256-GCM, rate limiting
+per-tier + lockout login, audit log ber-`IP_HASH_SALT`, dan validasi input
+terpusat (Zod).
+
+> **Pencabutan sesi:** JWT memuat `id`/`role` dan `sessionVersion` yang
+> dibandingkan dengan kolom `User.sessionVersion` di database (`SESSION_REVALIDATE_SECONDS`,
+> default 60 detik). Reset password, perubahan role oleh admin, dan penonaktifan
+> 2FA menaikkan nilai itu — semua sesi lama (termasuk cookie yang dicuri) berhenti
+> berlaku paling lama satu jendela validasi, bukan menunggu JWT kedaluwarsa.
+
+> **Penautan akun OAuth:** login Google/GitHub hanya diterima bila provider
+> benar-benar memverifikasi email akun itu (Google: klaim `email_verified`;
+> GitHub: dicek ke `GET /user/emails`, `verified: true`). Flag
+> `allowDangerousEmailAccountLinking` **tidak** dipakai — penautan email ke akun
+> lokal diatur callback `signIn` sendiri, dan akun lokal yang mengaktifkan 2FA
+> **tidak bisa** masuk lewat OAuth (wajib email + password + kode TOTP, supaya
+> OAuth tidak menjadi jalan pintas melewati 2FA). Email yang belum terverifikasi
+> di provider ditolak, bukan ditautkan.
+
+> **Catatan 2FA:** verifikasi kode TOTP hanya terjadi di
+> `src/lib/auth.ts` (`authorize()`), di dalam alur login yang sudah dilindungi
+> lockout. Endpoint `POST /api/auth/2fa/verify` sengaja **tidak** memverifikasi
+> kode — ia hanya melaporkan apakah akun memerlukan langkah 2FA (dipakai form
+> login). **Kode cadangan bisa dipakai login** sebagai pengganti TOTP: yang
+> disimpan di database hanya hash bcrypt-nya (tabel `TwoFactorBackupCode`), tiap
+> kode sekali pakai, input diterima di kolom kode 2FA pada halaman login
+> (format `XXXXX-XXXXX`). Kode baru bisa dibuat kapan saja dari `/auth/2fa`
+> dengan memasukkan password — membuat kode baru otomatis membatalkan semua kode
+> lama.
+
+> **Peran database & pipeline deploy:** aplikasi (`web`) memakai role PostgreSQL
+> terpisah dengan hak DML saja (`anichin_app` / `anichin_staging_app`) — bukan
+> role pemilik database yang dipakai `migrate` dan `backup-cron` — jadi celah di
+> aplikasi tidak bisa `DROP`/`ALTER`/`TRUNCATE` tabel. Pipeline deploy juga
+> memverifikasi host key SSH server (secret `DEPLOY_HOST_KEY`, opsi
+> `StrictHostKeyChecking=yes`) dan gagal keras bila host key belum dipin; tidak
+> ada lagi `ssh-keyscan`/trust-on-first-use.
 
 ## Menjaga kerahasiaan
 

@@ -82,6 +82,9 @@ server.log
 # Admin credentials (generated locally, never commit)
 .env.admin
 .env
+# F-15: file sementara `ssh-keyscan -H <host> > deploy_host_key.txt` dari
+# docs/DEPLOYMENT.md — isinya bukan rahasia, tapi jangan sampai ter-commit.
+deploy_host_key*.txt
 
 # Playwright (E2E)
 /test-results/

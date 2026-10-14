@@ -2,54 +2,47 @@ import { logger } from "@/lib/logger";
 import { NextRequest, NextResponse } from 'next/server';
 import { checkRateLimit, addRateLimitHeaders } from '@/lib/rate-limit';
 import { db } from '@/lib/db';
-import {
-  verifyTwoFactorToken,
-  decryptSecret,
-} from '@/lib/two-factor';
 
 /**
- * POST /api/auth/2fa/verify
+ * POST /api/auth/2fa/verify — status "perlu langkah 2FA?" untuk halaman login.
  *
- * Used by the LOGIN flow (NOT by an authenticated session).
+ * Halaman login memakainya SETELAH `signIn('credentials')` gagal, untuk
+ * membedakan "password/email salah" dari "password benar tapi butuh kode TOTP",
+ * supaya form bisa menampilkan input kode 6 digit.
  *
- * The frontend login flow is:
- *   1. POST /api/auth/credentials/signin (NextAuth) with email + password.
- *      — But first, the frontend peeks at whether the user has 2FA enabled:
- *        a. POST /api/auth/2fa/verify with { email, token: '__probe__' }
- *           ... no — that would burn a rate-limit slot. Instead, we expose a
- *           hint via the response shape below.
+ * Body: { email: string }
+ * Respons: 200 { requiresTwoFactor: boolean }
  *
- * Simpler approach (this endpoint):
- *   - Frontend calls this endpoint with { email, token } AFTER confirming the
- *     password is valid (password check happens client-side first via the
- *     normal credentials flow, OR the frontend can call this endpoint after
- *     prompting for the 2FA token).
+ * ── Kenapa endpoint ini TIDAK lagi memverifikasi kode TOTP ──────────────────
+ * Versi sebelumnya menerima `{ email, token }` dan menjawab
+ * `{ valid: true|false, requiresTwoFactor }` — artinya siapa pun (tanpa login,
+ * tanpa password) bisa memvalidasi kode TOTP milik akun mana pun. Itu oracle
+ * brute-force: kode TOTP hanya 6 digit, dan penyerang yang sudah punya password
+ * cukup mencari kode yang sedang valid lewat endpoint ini (tanpa pernah menyentuh
+ * lockout login), lalu memakainya sekali di `signIn`. Lockout 5×/15 menit di
+ * `src/lib/auth.ts` jadi tidak berguna karena percobaan kode dilakukan di luar
+ * alur login.
  *
- * Contract:
- *   - Body: { email: string, token: string }
- *   - 200: { valid: boolean, requiresTwoFactor: boolean }
+ * Sekarang verifikasi TOTP HANYA terjadi di dalam NextAuth credentials callback
+ * (`authorize()` di src/lib/auth.ts), yang:
+ *   - memeriksa `isAccountLocked(email, ip)` sebelum verifikasi,
+ *   - mencatat setiap kegagalan (`recordFailedAttempt`) → 5 gagal = terkunci
+ *     15 menit per email+IP,
+ *   - dan memverifikasi TOTP sebelum sesi dibuat.
+ * Endpoint ini hanya membaca flag `twoFactorEnabled` (tanpa memakai token), jadi
+ * tidak ada lagi jalur verifikasi kode di luar lockout.
  *
- * If the user does NOT have 2FA enabled, returns { valid: false, requiresTwoFactor: false }
- * — the frontend should skip the 2FA step and proceed with signIn().
- *
- * If the user HAS 2FA enabled, decrypts the stored secret and verifies the
- * 6-digit TOTP token. Returns { valid: true|false, requiresTwoFactor: true }.
- *
- * Note on backup codes: per the task spec, backup codes are generated and shown
- * once but not stored in the DB (schema has no column). For now this endpoint
- * only verifies TOTP tokens. Backup-code support can be added later by
- * introducing a hashed backup-codes column on User.
- *
- * Security notes:
- *   - This endpoint is UNAUTHENTICATED (called during login) → strict rate
- *     limit (auth tier, 20 req/60s per IP).
- *   - We do NOT reveal whether an email exists; we return a generic
- *     "requiresTwoFactor: false" for both nonexistent users and users without
- *     2FA, so an attacker cannot enumerate who has 2FA enabled.
- *   - We do NOT log token values.
+ * Catatan (sisa risiko yang diterima): respons membedakan akun dengan 2FA aktif
+ * dari akun lain, sehingga email yang sudah diketahui bisa di-probe status
+ * 2FA-nya. Ini diperlukan untuk UX (form login harus tahu kapan menampilkan
+ * input kode) dan dibatasi rate limit tier `auth` (20 req/60s per IP). Kalau
+ * nanti status 2FA harus benar-benar tertutup, endpoint ini perlu meminta
+ * password dan memverifikasinya (dengan lockout yang sama) sebelum menjawab.
  */
 export async function POST(req: NextRequest) {
   try {
+    // Strict rate limit (auth tier, 20 req/60s per IP) — endpoint tidak
+    // terautentikasi dan dipanggil saat login.
     const limited = await checkRateLimit(req, 'auth');
     if (limited) return limited;
 
@@ -72,14 +65,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { email, token } = (body ?? {}) as {
-      email?: unknown;
-      token?: unknown;
-    };
+    const { email } = (body ?? {}) as { email?: unknown };
 
-    if (typeof email !== 'string' || typeof token !== 'string') {
+    if (typeof email !== 'string') {
       return NextResponse.json(
-        { error: 'Email dan token wajib diisi.' },
+        { error: 'Email wajib diisi.' },
         { status: 400 }
       );
     }
@@ -94,69 +84,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Clean the token (allow 6 digits; authenticator apps sometimes paste with
-    // spaces)
-    const cleanToken = String(token).replace(/\s+/g, '');
-
-    // Look up the user
+    // Hanya baca flag — tidak menyentuh `twoFactorSecret` sama sekali.
     const user = await db.user.findUnique({
       where: { email: normalizedEmail },
-      select: {
-        id: true,
-        twoFactorEnabled: true,
-        twoFactorSecret: true,
-      },
+      select: { twoFactorEnabled: true },
     });
 
-    // Anti-enumeration: if user doesn't exist or 2FA not enabled, return a
-    // consistent "no 2FA needed" response so attackers can't probe.
-    if (!user || !user.twoFactorEnabled || !user.twoFactorSecret) {
-      return addRateLimitHeaders(
-        NextResponse.json(
-          { valid: false, requiresTwoFactor: false },
-          { status: 200 }
-        ),
-        'auth'
-      );
-    }
-
-    // User has 2FA enabled → verify the token
-    let decryptedSecret: string;
-    try {
-      decryptedSecret = decryptSecret(user.twoFactorSecret);
-    } catch (decErr) {
-      // Decryption failed (corrupted ciphertext, key rotation, tamper attempt)
-      logger.error(
-        '[2fa/verify] decryptSecret failed',
-        { error: decErr instanceof Error ? decErr.message : String(decErr), userId: user.id }
-      );
-      // Fail closed — do NOT let the user in
-      return addRateLimitHeaders(
-        NextResponse.json(
-          { valid: false, requiresTwoFactor: true },
-          { status: 200 }
-        ),
-        'auth'
-      );
-    }
-
-    const isValid = verifyTwoFactorToken(cleanToken, decryptedSecret);
-
-    if (isValid && process.env.NODE_ENV !== 'production') {
-      logger.info(`[2fa/verify] valid TOTP token for user ${user.id}`);
-    }
+    // Akun tanpa 2FA / email tidak dikenal → langkah 2FA dilewati.
+    const requiresTwoFactor = Boolean(user?.twoFactorEnabled);
 
     return addRateLimitHeaders(
-      NextResponse.json(
-        { valid: isValid, requiresTwoFactor: true },
-        { status: 200 }
-      ),
+      NextResponse.json({ requiresTwoFactor }, { status: 200 }),
       'auth'
     );
   } catch (err) {
     logger.error('[2fa/verify] Unexpected error:', { error: err instanceof Error ? err.message : String(err) });
     return NextResponse.json(
-      { error: 'Gagal verifikasi 2FA. Coba lagi.' },
+      { error: 'Gagal memeriksa status 2FA. Coba lagi.' },
       { status: 500 }
     );
   }

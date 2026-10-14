@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { getToken } from 'next-auth/jwt';
+import { tokenCookieParams } from '@/lib/auth-cookies';
 
 /**
  * Security Headers Middleware
@@ -21,7 +22,19 @@ import { getToken } from 'next-auth/jwt';
 
 // Trusted domains for scripts, styles, images, and connections
 const SELF = "'self'";
-const TRUSTED_SCRIPT_DOMAINS = ['https://chunk-server.com'];
+/**
+ * Domain skrip pihak ketiga yang benar-benar dipakai aplikasi.
+ *
+ * Sebelumnya berisi `https://chunk-server.com` — domain yang TIDAK direferensikan
+ * oleh satu pun file di repo ini, tidak ada di package.json, dan bukan CDN mana
+ * pun yang dipakai aplikasi. Membiarkan allowlist `script-src` menunjuk domain
+ * asing berarti: (a) siapa pun yang menguasai domain itu bisa memuat skrip ke
+ * halaman kita pada browser yang mengabaikan `'strict-dynamic'` (browser lama /
+ * proxy yang menurunkan CSP), dan (b) domain yang pindah kepemilikan menjadi
+ * jalur suplai skrip. Daftar ini harus kosong sampai memang ada CDN tetap yang
+ * perlu diizinkan — tambahkan hanya dengan alasan yang jelas + review.
+ */
+const TRUSTED_SCRIPT_DOMAINS: string[] = [];
 const TRUSTED_STYLES = [SELF, "'unsafe-inline'"]; // styles still need unsafe-inline (Next.js inline styles)
 const TRUSTED_IMAGES = [SELF, 'data:', 'blob:', 'https:'];
 // Media sources — blob: is required for HLS.js MediaSource playback, https: for
@@ -99,9 +112,15 @@ export async function proxy(request: NextRequest) {
   // --- Admin route protection (auth + role check via JWT) ---
   // Middleware runs on Edge runtime — use getToken (JWT decode, no DB call)
   if (pathname.startsWith('/admin')) {
+    // `cookieName`/`secureCookie` dioper EKSPLISIT dari `@/lib/auth-cookies`.
+    // Tanpa ini `getToken()` menghitung namanya sendiri dari NEXTAUTH_URL
+    // (`__Secure-next-auth.session-token` di produksi) sementara authOptions
+    // menulis `next-auth.session-token` → token selalu tidak ditemukan dan
+    // /admin tidak pernah bisa dibuka (F-18 di docs/SECURITY-AUDIT.md).
     const token = await getToken({
       req: request,
       secret: process.env.NEXTAUTH_SECRET,
+      ...tokenCookieParams,
     });
 
     if (!token) {

@@ -1,12 +1,22 @@
 import type { Metadata } from 'next';
+import { redirect } from 'next/navigation';
+import { isAdmin } from '@/lib/session';
 
 /**
  * Admin area harus selalu noindex.
  *
- * Halaman /admin dilindungi proxy (JWT role check) + requireAdmin() di setiap
- * route API, tapi tanpa metadata ini URL-nya masih bisa muncul di hasil
- * pencarian. `robots.ts` juga sudah men-disallow /admin — dua-duanya dipakai
- * sebagai defense in depth.
+ * Halaman /admin dijaga tiga lapis:
+ *   1. `src/proxy.ts` (Edge) — menolak non-admin berdasarkan klaim JWT, murah
+ *      tapi TIDAK memeriksa DB;
+ *   2. layout ini (Node runtime) — `isAdmin()` menempuh jalur session NextAuth
+ *      yang menjalankan `jwt` callback, sehingga `sessionVersion` di DB ikut
+ *      diperiksa: admin yang baru diturunkan atau akun yang dihapus langsung
+ *      ditolak (pencabutan sesi, audit F-06);
+ *   3. setiap route `/api/admin/*` memanggil `requireAdmin()` — sumber data
+ *      sebenarnya, jadi tidak ada data admin yang bisa diambil tanpa hak admin.
+ *
+ * Tanpa metadata ini URL /admin masih bisa muncul di hasil pencarian
+ * (`robots.ts` juga men-disallow /admin — dua-duanya defense in depth).
  */
 export const metadata: Metadata = {
   title: 'Panel Admin',
@@ -18,6 +28,9 @@ export const metadata: Metadata = {
   },
 };
 
-export default function AdminLayout({ children }: { children: React.ReactNode }) {
+export default async function AdminLayout({ children }: { children: React.ReactNode }) {
+  if (!(await isAdmin())) {
+    redirect('/auth/login?callbackUrl=/admin&error=AccessDenied');
+  }
   return children;
 }

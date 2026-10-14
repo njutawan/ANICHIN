@@ -54,20 +54,26 @@ cp .env.example .env
 
 # Generate secure secrets
 NEXTAUTH_SECRET=$(openssl rand -base64 32)
+# POSTGRES_PASSWORD = role migrasi/owner (hak DDL) — dipakai `migrate` + `backup-cron`
 POSTGRES_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)
-TWO_FACTOR_KEY=$(openssl rand -base64 32)
+# POSTGRES_APP_PASSWORD = role aplikasi (DML saja) — dipakai `web` (audit F-16).
+# WAJIB berbeda dari POSTGRES_PASSWORD.
+POSTGRES_APP_PASSWORD=$(openssl rand -hex 32)
+TWO_FACTOR_KEY=$(openssl rand -hex 32)   # 64 hex char (bukan base64!)
 
 # Edit .env file
 nano .env
 # Or use sed to replace values:
 sed -i "s|NEXTAUTH_SECRET=.*|NEXTAUTH_SECRET=$NEXTAUTH_SECRET|" .env
 sed -i "s|POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$POSTGRES_PASSWORD|" .env
+sed -i "s|POSTGRES_APP_PASSWORD=.*|POSTGRES_APP_PASSWORD=$POSTGRES_APP_PASSWORD|" .env
 sed -i "s|NEXTAUTH_URL=.*|NEXTAUTH_URL=https://anichin.id|" .env
 sed -i "s|# SITE_DOMAIN=.*|SITE_DOMAIN=anichin.id|" .env
 
 # IMPORTANT: Save these secrets somewhere safe!
 echo "NEXTAUTH_SECRET=$NEXTAUTH_SECRET"
 echo "POSTGRES_PASSWORD=$POSTGRES_PASSWORD"
+echo "POSTGRES_APP_PASSWORD=$POSTGRES_APP_PASSWORD"
 
 # Verify .env
 cat .env | grep -v "^#" | grep -v "^$"
@@ -174,13 +180,26 @@ gh auth login
 # configuration" di .github/workflows/deploy.yml)
 gh secret set NEXTAUTH_SECRET --body "$NEXTAUTH_SECRET"   # ≥32 karakter
 gh secret set NEXTAUTH_URL --body "https://anichin.id"    # wajib https://
-gh secret set POSTGRES_PASSWORD --body "$POSTGRES_PASSWORD"
+gh secret set POSTGRES_PASSWORD --body "$POSTGRES_PASSWORD"          # role migrasi/owner (DDL)
+gh secret set POSTGRES_APP_PASSWORD --body "$(openssl rand -hex 32)"  # role aplikasi (DML saja, F-16)
 
 # SSH deploy secrets (dibutuhkan agar benar-benar men-deploy; tanpa
 # DEPLOY_HOST job `deploy` di-skip dan hanya image yang di-build)
 gh secret set DEPLOY_HOST --body "your-server-ip"
 gh secret set DEPLOY_USER --body "deploy"
 gh secret set DEPLOY_SSH_KEY --body "$(cat ~/.ssh/deploy_key)"
+
+# F-15 — host key SSH yang DIPIN (wajib bila DEPLOY_HOST diisi; tanpa ini
+# workflow berhenti sebelum build dengan error "Host key SSH belum dipin").
+# Tujuannya: runner tidak lagi memakai ssh-keyscan + StrictHostKeyChecking=no
+# (yang membuat pipeline mempercayai kunci apa pun yang menjawab di DEPLOY_HOST).
+# Ambil kunci dari mesin tepercaya, lalu COCOKKAN fingerprint-nya dengan kunci
+# server yang sebenarnya (panel hosting / konsol / `ssh-keygen -lf` di server)
+# sebelum menyimpannya:
+ssh-keyscan -H your-server-ip > deploy_host_key.txt 2>/dev/null
+ssh-keygen -lf deploy_host_key.txt        # cocokkan dengan fingerprint server!
+gh secret set DEPLOY_HOST_KEY < deploy_host_key.txt
+rm -f deploy_host_key.txt
 
 # OPSIONAL — kalau tidak diisi, kunci itu tidak ditulis ke .env:
 gh secret set SITE_DOMAIN --body "anichin.id"           # default: host dari NEXTAUTH_URL
@@ -197,6 +216,49 @@ gh secret set REGISTRY_PASS --body "$GITHUB_TOKEN"
 
 # Notifikasi (opsional)
 gh secret set SLACK_WEBHOOK --body "https://hooks.slack.com/services/..."
+
+# Staging (.github/workflows/staging.yml) memakai secret dengan awalan
+# STAGING_. Pola host key sama: pin kunci server staging, jangan biarkan
+# pipeline mempercayai kunci apa pun yang menjawab.
+gh secret set STAGING_DEPLOY_HOST_KEY < deploy_host_key_staging.txt
+gh secret set STAGING_POSTGRES_APP_PASSWORD --body "$(openssl rand -hex 32)"
+
+# ─────────────────────────────────────────────────────────────
+# STEP 8b: Peran database (F-16 — least privilege)
+# ─────────────────────────────────────────────────────────────
+# Compose menjalankan DUA role dengan kredensial berbeda:
+#
+#   migrate + backup-cron → role owner (`anichin`)          → POSTGRES_PASSWORD
+#                           hak DDL (buat/ubah tabel), pg_dump
+#   web (aplikasi)        → role `anichin_app`              → POSTGRES_APP_PASSWORD
+#                           HANYA SELECT/INSERT/UPDATE/DELETE — tidak bisa
+#                           CREATE/ALTER/DROP/TRUNCATE
+#
+# Skrip pembuat role: scripts/postgres-init/10-app-role.sh (idempoten, dipasang
+# compose sebagai /docker-entrypoint-initdb.d sehingga otomatis jalan saat
+# volume database masih kosong).
+#
+# DATABASE SUDAH ADA (instalasi lama)? Entrypoint initdb tidak jalan lagi pada
+# volume yang sudah terisi — tetapi compose sekarang punya service `db-roles`
+# yang menjalankan skrip yang sama setiap `up` (idempoten), dan `web` menunggu
+# service itu selesai. Jadi `docker compose up -d` sudah cukup. Kalau ingin
+# menjalankannya manual (mis. untuk memeriksa outputnya):
+#   cd /opt/anichin-production
+#   docker compose -f docker-compose.prod.yml up -d db
+#   docker compose -f docker-compose.prod.yml exec -T db \
+#     sh /docker-entrypoint-initdb.d/10-app-role.sh
+#   docker compose -f docker-compose.prod.yml up -d web   # pakai kredensial role aplikasi
+#
+# Cek hasilnya (sebagai role owner):
+#   docker compose -f docker-compose.prod.yml exec -T db \
+#     psql -U anichin -d anichin -c "\du anichin_app"
+#   → harus terlihat: "Cannot create database/role", bukan superuser.
+
+# OPSIONAL (disarankan, F-15): aktifkan "Required reviewers" pada environment
+# `production` di Settings → Environments supaya deploy ke produksi butuh
+# persetujuan manual. Verifikasi host key SSH dilakukan oleh pipeline
+# (DEPLOY_HOST_KEY), sedangkan reviewer melindungi dari deploy yang tidak
+# diinginkan.
 
 # Yang dilakukan pipeline dengan secret tersebut:
 #   • File .env di server DIBUAT dari secret di atas bila belum ada, dan

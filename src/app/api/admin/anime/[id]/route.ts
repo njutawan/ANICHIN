@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { requireAdmin } from '@/lib/session';
 import { checkRateLimit, addRateLimitHeaders } from '@/lib/rate-limit';
 import { logger } from '@/lib/logger';
+import { sanitizeMediaUrl } from '@/lib/security';
 
 export const dynamic = 'force-dynamic';
 
@@ -180,8 +181,18 @@ export async function PATCH(
       }
       data.synopsis = synopsis;
     }
-    if (body.poster !== undefined) data.poster = String(body.poster).trim();
-    if (body.banner !== undefined) data.banner = optionalStr(body.banner);
+    // F-14: URL media wajib lolos validasi skema (http/https atau path internal).
+    if (body.poster !== undefined) {
+      const poster = sanitizeMediaUrl(body.poster);
+      if (!poster) {
+        return NextResponse.json(
+          { error: 'URL poster tidak valid. Gunakan http:// atau https:// (atau path internal yang diawali /).' },
+          { status: 400 }
+        );
+      }
+      data.poster = poster;
+    }
+    if (body.banner !== undefined) data.banner = sanitizeMediaUrl(body.banner);
     if (body.titleEn !== undefined) data.titleEn = optionalStr(body.titleEn);
     if (body.titleJp !== undefined) data.titleJp = optionalStr(body.titleJp);
     if (body.alternativeTitle !== undefined) data.alternativeTitle = optionalStr(body.alternativeTitle);
@@ -190,7 +201,7 @@ export async function PATCH(
     if (body.rating !== undefined) data.rating = optionalStr(body.rating);
     if (body.duration !== undefined) data.duration = optionalStr(body.duration);
     if (body.airedDay !== undefined) data.airedDay = optionalStr(body.airedDay);
-    if (body.trailer !== undefined) data.trailer = optionalStr(body.trailer);
+    if (body.trailer !== undefined) data.trailer = sanitizeMediaUrl(body.trailer);
 
     if (body.type !== undefined) {
       data.type = ALLOWED_TYPES.includes(body.type) ? body.type : 'TV';

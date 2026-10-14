@@ -17,58 +17,17 @@
  *   clearFails(key) → void
  */
 
-import { logger } from '@/lib/logger';
-import type Redis from 'ioredis';
+import {
+  getRedis,
+  isRedisAvailable as redisAvailable,
+} from '@/lib/redis-client';
 
-// ── Lazy Redis connection (only initialized if REDIS_URL is set) ──
-let redisClient: Redis | null = null;
-let redisInitPromise: Promise<Redis | null> | null = null;
-let redisAvailable = false;
-
-function isRedisConfigured(): boolean {
-  return !!process.env.REDIS_URL;
-}
-
-async function getRedis(): Promise<Redis | null> {
-  if (!isRedisConfigured()) return null;
-  if (redisClient) return redisClient;
-  if (redisInitPromise) return redisInitPromise;
-
-  redisInitPromise = (async () => {
-    try {
-      const { default: IORedis } = await import('ioredis');
-      const client = new IORedis(process.env.REDIS_URL!, {
-        maxRetriesPerRequest: 3,
-        enableReadyCheck: true,
-        lazyConnect: false,
-        connectTimeout: 5000,
-        retryStrategy: (times) => Math.min(times * 200, 2000),
-      });
-
-      client.on('error', (err) => {
-        if (process.env.NODE_ENV !== 'production') {
-          logger.warn('[redis] connection error', { error: err.message });
-        }
-      });
-      client.on('connect', () => {
-        redisAvailable = true;
-        if (process.env.NODE_ENV !== 'production') {
-          logger.info('[redis] connected — rate limiting is now Redis-backed');
-        }
-      });
-      client.on('close', () => {
-        redisAvailable = false;
-      });
-
-      redisClient = client;
-      return client;
-    } catch (err) {
-      logger.warn('[redis] init failed, falling back to in-memory', { error: err instanceof Error ? err.message : String(err) });
-      return null;
-    }
-  })();
-
-  return redisInitPromise;
+// ── Koneksi Redis ──
+// Klien (lazy, satu per proses) dipusatkan di '@/lib/redis-client' karena dipakai
+// juga oleh store pending-secret 2FA (F-11). Flag ketersediaan di-export oleh
+// modul itu dan dibaca di sini sebagai fungsi supaya nilainya selalu terbaru.
+function isRedisReady(): boolean {
+  return redisAvailable();
 }
 
 // ── In-memory fallback store ──
@@ -112,7 +71,7 @@ export async function incrementRateLimit(
   maybeCleanupMemory();
   const redis = await getRedis();
 
-  if (redis && redisAvailable) {
+  if (redis && isRedisReady()) {
     // Redis: use INCR + EXPIRE (atomic)
     const redisKey = `rl:${key}`;
     const count = await redis.incr(redisKey);
@@ -140,7 +99,7 @@ export async function incrementRateLimit(
 export async function getRateLimitTTL(key: string): Promise<number> {
   const redis = await getRedis();
 
-  if (redis && redisAvailable) {
+  if (redis && isRedisReady()) {
     const ttl = await redis.pttl(`rl:${key}`);
     return ttl > 0 ? ttl : 0;
   }
@@ -155,7 +114,7 @@ export async function getRateLimitTTL(key: string): Promise<number> {
  */
 export async function resetRateLimit(key: string): Promise<void> {
   const redis = await getRedis();
-  if (redis && redisAvailable) {
+  if (redis && isRedisReady()) {
     await redis.del(`rl:${key}`);
     return;
   }
@@ -170,7 +129,7 @@ export async function resetRateLimit(key: string): Promise<void> {
  */
 export async function setLock(key: string, ttlMs: number): Promise<void> {
   const redis = await getRedis();
-  if (redis && redisAvailable) {
+  if (redis && isRedisReady()) {
     await redis.set(`lock:${key}`, '1', 'PX', ttlMs);
     return;
   }
@@ -184,7 +143,7 @@ export async function isLocked(key: string): Promise<boolean> {
   maybeCleanupMemory();
   const redis = await getRedis();
 
-  if (redis && redisAvailable) {
+  if (redis && isRedisReady()) {
     const val = await redis.get(`lock:${key}`);
     return val !== null;
   }
@@ -206,7 +165,7 @@ export async function incrFails(key: string, ttlMs: number): Promise<number> {
   maybeCleanupMemory();
   const redis = await getRedis();
 
-  if (redis && redisAvailable) {
+  if (redis && isRedisReady()) {
     const redisKey = `fails:${key}`;
     const count = await redis.incr(redisKey);
     if (count === 1) {
@@ -230,7 +189,7 @@ export async function incrFails(key: string, ttlMs: number): Promise<number> {
  */
 export async function clearFails(key: string): Promise<void> {
   const redis = await getRedis();
-  if (redis && redisAvailable) {
+  if (redis && isRedisReady()) {
     await redis.del(`fails:${key}`);
     await redis.del(`lock:${key}`);
     return;
@@ -246,7 +205,7 @@ export async function checkRedisHealth(): Promise<{
   configured: boolean;
   connected: boolean;
 }> {
-  if (!isRedisConfigured()) {
+  if (!process.env.REDIS_URL) {
     return { configured: false, connected: false };
   }
   const redis = await getRedis();

@@ -84,7 +84,7 @@ Legenda: ✅ diperbaiki · 🟡 sebagian / perlu tindak lanjut · ⬜ belum
 
 ---
 
-**Yang sudah bagus dan jangan diutak-atik tanpa alasan:** 2FA (TOTP + backup code terenkripsi AES-256-GCM), rate limiting 3-tier + login lockout, CSP nonce, 11 security header di `src/proxy.ts`, anti-enumeration di auth, audit log, `requireAdmin()` di semua route admin, multi-stage Dockerfile + healthcheck, dan `docs/` yang lumayan rapi.
+**Yang sudah bagus dan jangan diutak-atik tanpa alasan:** 2FA (TOTP dengan secret terenkripsi AES-256-GCM + kode cadangan ber-hash bcrypt & sekali pakai), rate limiting 3-tier + login lockout, CSP nonce, 11 security header di `src/proxy.ts`, anti-enumeration di auth, audit log, `requireAdmin()` di semua route admin, multi-stage Dockerfile + healthcheck, dan `docs/` yang lumayan rapi.
 
 ---
 

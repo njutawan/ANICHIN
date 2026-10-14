@@ -4,7 +4,8 @@ import { requireUser } from '@/lib/session';
 import { checkRateLimit, addRateLimitHeaders } from '@/lib/rate-limit';
 import { db } from '@/lib/db';
 import { compareSync } from 'bcryptjs';
-import { clearPendingSecret } from '@/lib/two-factor';
+import { clearPendingSecret } from '@/lib/two-factor-pending';
+import { clearBackupCodes } from '@/lib/two-factor-backup';
 
 /**
  * POST /api/auth/2fa/disable
@@ -16,7 +17,8 @@ import { clearPendingSecret } from '@/lib/two-factor';
  * Body: { password: string }
  *
  * On success: clears user.twoFactorSecret + sets user.twoFactorEnabled = false,
- * and also drops any pending setup secret for that user.
+ * deletes the stored backup codes (F-10), and also drops any pending setup
+ * secret for that user.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -92,18 +94,30 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Disable 2FA — clear secret + flag
+    // Disable 2FA — clear secret + flag.
+    //
+    // `sessionVersion` dinaikkan: 2FA adalah faktor kedua pada login, jadi
+    // menonaktifkannya menurunkan tingkat jaminan seluruh sesi yang ada. Sesi
+    // lain (mis. cookie yang dicuri lalu dipakai menonaktifkan 2FA) langsung
+    // dicabut dan harus login ulang — sesi yang sedang dipakai untuk aksi ini
+    // juga ikut logout, jadi klien harus mengarahkan pengguna ke halaman login.
     await db.user.update({
       where: { id: userId },
       data: {
         twoFactorSecret: null,
         twoFactorEnabled: false,
+        sessionVersion: { increment: 1 },
       },
     });
 
+    // Kode cadangan ikut dihapus: 2FA sudah mati, kode itu tidak boleh
+    // tertinggal di database sebagai kredensial yang bisa dipakai bila 2FA
+    // dinyalakan lagi dengan secret berbeda.
+    await clearBackupCodes(userId);
+
     // Also clear any stale pending secret (e.g. user started setup, then
     // decided to disable instead)
-    clearPendingSecret(userId);
+    await clearPendingSecret(userId);
 
     if (process.env.NODE_ENV !== 'production') {
       logger.info(`[2fa/disable] 2FA disabled for user ${userId}`);

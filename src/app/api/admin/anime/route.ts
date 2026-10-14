@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { requireAdmin } from '@/lib/session';
 import { checkRateLimit, addRateLimitHeaders } from '@/lib/rate-limit';
 import { logger } from '@/lib/logger';
+import { sanitizeMediaUrl } from '@/lib/security';
 
 export const dynamic = 'force-dynamic';
 
@@ -164,7 +165,9 @@ export async function POST(req: NextRequest) {
 
     const title = (body.title ?? '').toString().trim();
     const synopsis = (body.synopsis ?? '').toString().trim();
-    const poster = (body.poster ?? '').toString().trim();
+    // F-14: poster/banner/trailer divalidasi sebagai URL (http/https atau path
+    // internal), bukan sekadar dipotong panjangnya.
+    const poster = sanitizeMediaUrl(body.poster) ?? '';
 
     if (!title) {
       return NextResponse.json(
@@ -185,8 +188,13 @@ export async function POST(req: NextRequest) {
       );
     }
     if (!poster) {
+      const rawPoster = (body.poster ?? '').toString().trim();
       return NextResponse.json(
-        { error: 'URL poster wajib diisi.' },
+        {
+          error: rawPoster
+            ? 'URL poster tidak valid. Gunakan http:// atau https:// (atau path internal yang diawali /).'
+            : 'URL poster wajib diisi.',
+        },
         { status: 400 }
       );
     }
@@ -216,7 +224,7 @@ export async function POST(req: NextRequest) {
         alternativeTitle: optionalStr(body.alternativeTitle),
         synopsis,
         poster,
-        banner: optionalStr(body.banner),
+        banner: sanitizeMediaUrl(body.banner),
         type,
         status,
         studio: optionalStr(body.studio),
@@ -228,7 +236,7 @@ export async function POST(req: NextRequest) {
         views,
         duration: optionalStr(body.duration),
         airedDay: optionalStr(body.airedDay),
-        trailer: optionalStr(body.trailer),
+        trailer: sanitizeMediaUrl(body.trailer),
         featured: !!body.featured,
         trending: !!body.trending,
         popular: !!body.popular,
