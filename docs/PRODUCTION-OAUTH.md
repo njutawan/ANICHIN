@@ -73,9 +73,13 @@ openssl rand -base64 32
 openssl rand -hex 32
 # Example output: 3f9c1a7d2b8e4506c1d9f3a7b2e85091c4d7a0f6b3e2914d8c5a70f1e6b3d924
 
-# POSTGRES_PASSWORD — for production database
+# POSTGRES_PASSWORD — role migrasi/owner database (hak DDL)
 openssl rand -base64 24 | tr -d '/+=' | head -c 32
 # Example output: Xk9Pm2QvR7sT3wB6nF1hJ5kD0gH9sZ
+
+# POSTGRES_APP_PASSWORD — role aplikasi (DML saja) untuk service `web` (F-16)
+openssl rand -hex 32
+# Example output: 8a1f0c73d95b2e6417ab3ce8051f9d26b47c0e9182fa53d61c8b0e7a2d4f69b3
 ```
 
 **Save these securely** — if lost, all user sessions will be invalidated.

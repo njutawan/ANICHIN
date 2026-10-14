@@ -78,6 +78,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       deploy: ${{ steps.detect.outputs.deploy }}
+      host_key: ${{ steps.detect.outputs.host_key }}
       registry: ${{ steps.detect.outputs.registry }}
       smoke: ${{ steps.detect.outputs.smoke }}
       slack: ${{ steps.detect.outputs.slack }}
@@ -92,6 +93,9 @@ jobs:
         id: detect
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          # Host key SSH yang dipin (F-15) — isinya baris known_hosts untuk
+          # DEPLOY_HOST. Tanpa ini deploy dihentikan (lihat guard di bawah).
+          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
           REGISTRY: ${{ secrets.REGISTRY }}
           NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
@@ -101,6 +105,7 @@ jobs:
           flag() { [ -n "$2" ] && echo "$1=true" || echo "$1=false"; }
           {
             flag deploy     "$DEPLOY_HOST"
+            flag host_key   "$DEPLOY_HOST_KEY"
             flag registry   "$REGISTRY"
             flag smoke      "$NEXTAUTH_URL"
             flag slack      "$SLACK_WEBHOOK"
@@ -115,6 +120,12 @@ jobs:
           fi
 
           # Alasan selalu ditulis eksplisit sebagai annotation.
+          if [ -n "$DEPLOY_HOST" ] && [ -z "$DEPLOY_HOST_KEY" ]; then
+            # F-15: jangan pernah kembali ke `ssh-keyscan` + StrictHostKeyChecking=no
+            # hanya karena secret ini belum diisi.
+            echo "::error title=Host key SSH belum dipin::DEPLOY_HOST terisi, tetapi secret DEPLOY_HOST_KEY kosong — pipeline tidak akan mempercayai kunci apa pun tanpa pin. Jalankan di mesin tepercaya: 'ssh-keyscan -H <$DEPLOY_HOST> > deploy_host_key.txt', COCOKKAN fingerprint-nya dengan kunci server yang sebenarnya (mis. lewat panel hosting/konsol), lalu simpan isi file itu sebagai secret DEPLOY_HOST_KEY."
+          fi
+
           if [ -n "$DEPLOY_HOST" ]; then
             echo "✅ DEPLOY_HOST terkonfigurasi — build → push → deploy → smoke test akan berjalan."
             if [ -z "$REGISTRY" ]; then
@@ -139,6 +150,14 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && steps.detect.outputs.proceed != 'true'
         run: |
           echo "::error title=Deploy tidak dikonfigurasi::Workflow ini dijalankan manual, tetapi DEPLOY_HOST kosong dan BUILD_ONLY tidak diset — tidak ada yang bisa di-deploy maupun di-rollback. Isi secret deploy, atau set repository variable BUILD_ONLY=true bila memang ingin build-only."
+          exit 1
+
+      # Guard F-15: dispatch manual dengan DEPLOY_HOST tetapi tanpa host key
+      # = GAGAL keras, sebelum satu pun langkah build/SSH berjalan.
+      - name: ❌ Guard — host key SSH belum dipin
+        if: github.event_name == 'workflow_dispatch' && steps.detect.outputs.deploy == 'true' && steps.detect.outputs.host_key != 'true'
+        run: |
+          echo "::error title=Host key SSH belum dipin::DEPLOY_HOST terisi, tetapi secret DEPLOY_HOST_KEY kosong. Tanpa host key yang dipin, verifikasi SSH dilewati dan pipeline bisa menyerahkan image/kredensial registry/.env ke host yang menyamar sebagai server deploy. Jalankan 'ssh-keyscan -H <host>' di mesin tepercaya, cocokkan fingerprint dengan kunci server sebenarnya, lalu simpan sebagai secret DEPLOY_HOST_KEY."
           exit 1
 
   # ── Job 2: Deploy (build → push → SSH → smoke test) ────────
@@ -182,6 +201,8 @@ jobs:
           NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
           NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          # F-16: kredensial role aplikasi (DML-only) — berbeda dari role owner.
+          POSTGRES_APP_PASSWORD: ${{ secrets.POSTGRES_APP_PASSWORD }}
           TWO_FACTOR_ENCRYPTION_KEY: ${{ secrets.TWO_FACTOR_ENCRYPTION_KEY }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
@@ -207,6 +228,13 @@ jobs:
           # server yang sudah punya .env tetap bisa deploy tanpa secret ini.
           if [ -z "$POSTGRES_PASSWORD" ]; then
             echo "::notice title=POSTGRES_PASSWORD tidak diset::Secret POSTGRES_PASSWORD kosong — memakai nilai yang sudah ada di .env server. Kalau .env belum ada, compose akan gagal start dengan 'POSTGRES_PASSWORD is required'."
+          fi
+
+          # F-16: password role aplikasi (DML-only) untuk service `web`.
+          # Sama seperti di atas, nilai di .env server tetap dipakai bila secret
+          # ini kosong — tetapi compose menolak start tanpa salah satunya.
+          if [ -z "$POSTGRES_APP_PASSWORD" ]; then
+            echo "::notice title=POSTGRES_APP_PASSWORD tidak diset::Secret POSTGRES_APP_PASSWORD kosong — memakai nilai yang sudah ada di .env server. Set 'openssl rand -hex 32' agar web memakai role DML-only (bukan role pemilik database); kalau keduanya kosong, compose akan gagal start."
           fi
 
           # NEXTAUTH_SECRET harus kuat (app menolak <16, dokumentasi menyarankan ≥32).
@@ -257,13 +285,57 @@ jobs:
           echo "::error title=Rollback tidak dikonfigurasi::Rollback diminta, tetapi DEPLOY_HOST kosong — tidak ada server yang bisa di-rollback. Isi secret DEPLOY_HOST/DEPLOY_USER/DEPLOY_SSH_KEY."
           exit 1
 
+      # ── SSH dengan host key dipin (F-15) ────────────────────
+      # Sebelumnya tiap langkah SSH menjalankan:
+      #   ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+      #   ssh -o StrictHostKeyChecking=no …
+      # → kegagalan keyscan ditelan `|| true` DAN verifikasi host key dimatikan,
+      # jadi runner menerima kunci apa pun yang menjawab di DEPLOY_HOST. Sekarang
+      # known_hosts ditulis dari secret DEPLOY_HOST_KEY, isinya divalidasi, dan
+      # semua perintah ssh/scp memakai StrictHostKeyChecking=yes.
+      - name: 🔐 Siapkan SSH (host key dipin dari secret)
+        if: success() && needs.preflight.outputs.deploy == 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "::error title=Deploy dihentikan::DEPLOY_HOST kosong."
+            exit 1
+          fi
+          if [ -z "$DEPLOY_HOST_KEY" ]; then
+            echo "::error title=Host key SSH belum dipin::DEPLOY_HOST_KEY kosong. Isi dengan baris known_hosts untuk $DEPLOY_HOST (lihat docs/DEPLOYMENT.md langkah 8) sebelum men-deploy."
+            exit 1
+          fi
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::error title=Kunci SSH deploy kosong::DEPLOY_SSH_KEY kosong — tidak ada kunci untuk autentikasi."
+            exit 1
+          fi
+
+          umask 077
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # known_hosts HANYA dari secret: tidak ada keyscan (TOFU) di runner.
+          printf '%s\n' "$DEPLOY_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+          # Pastikan entri untuk DEPLOY_HOST benar-benar ada sebelum dipakai.
+          if ! ssh-keygen -F "$DEPLOY_HOST" -f ~/.ssh/known_hosts > /dev/null              && ! grep -qF "$DEPLOY_HOST" ~/.ssh/known_hosts; then
+            echo "::error title=DEPLOY_HOST_KEY tidak memuat host::$DEPLOY_HOST_KEY tidak memuat entri untuk '$DEPLOY_HOST'. Isinya harus keluaran 'ssh-keyscan -H $DEPLOY_HOST'."
+            exit 1
+          fi
+          echo "🔐 Host key dipin untuk $DEPLOY_HOST:"
+          ssh-keygen -lf ~/.ssh/known_hosts
+
       # ── Rollback path (manual dispatch) ────────────────────
       - name: 🔄 Rollback to previous version
         if: github.event.inputs.rollback == 'true' && needs.preflight.outputs.deploy == 'true'
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
           APP_DIR: ${{ steps.cfg.outputs.app_dir }}
           # Dilewatkan ke skrip di server; nama image harus sama seperti saat
@@ -272,12 +344,7 @@ jobs:
           ANICHIN_MIGRATE_IMAGE: ${{ steps.cfg.outputs.migrate_image }}
         run: |
           set -euo pipefail
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "APP_DIR='$APP_DIR' ENVIRONMENT='$ENVIRONMENT' ROLLBACK_ONLY=1 ANICHIN_IMAGE='$ANICHIN_IMAGE' ANICHIN_MIGRATE_IMAGE='$ANICHIN_MIGRATE_IMAGE' bash -s" <<'REMOTE'
           set -euo pipefail
@@ -360,30 +427,29 @@ jobs:
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           APP_DIR: ${{ steps.cfg.outputs.app_dir }}
         run: |
           set -euo pipefail
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-
           # Bundle = file yang perlu ada di server. Source aplikasi TIDAK
           # dikirim: image sudah berisi semuanya, dan config dikirim dari commit
           # yang sedang di-deploy supaya tidak pernah berbeda dari image.
-          mkdir -p deploy-bundle/scripts
+          mkdir -p deploy-bundle/scripts/postgres-init
           cp docker-compose.prod.yml Caddyfile deploy-bundle/
           cp scripts/compose-deploy.sh scripts/deploy-env.sh scripts/backup-db.sh scripts/restore-db.sh deploy-bundle/scripts/
-          chmod +x deploy-bundle/scripts/*.sh
+          # F-16: skrip role aplikasi DB — di-mount ke /docker-entrypoint-initdb.d
+          # dan dipanggil ulang (idempoten) oleh compose-deploy.sh.
+          cp scripts/postgres-init/10-app-role.sh deploy-bundle/scripts/postgres-init/
+          chmod +x deploy-bundle/scripts/*.sh deploy-bundle/scripts/postgres-init/*.sh
 
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$APP_DIR/scripts' '$APP_DIR/backups'"
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -q \
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$APP_DIR/scripts/postgres-init' '$APP_DIR/backups'"
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -q \
             deploy-bundle/docker-compose.prod.yml deploy-bundle/Caddyfile \
             "$DEPLOY_USER@$DEPLOY_HOST:$APP_DIR/"
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -q \
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -q \
             deploy-bundle/scripts/*.sh "$DEPLOY_USER@$DEPLOY_HOST:$APP_DIR/scripts/"
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -q \
+            deploy-bundle/scripts/postgres-init/*.sh "$DEPLOY_USER@$DEPLOY_HOST:$APP_DIR/scripts/postgres-init/"
           echo "✓ File deploy terkirim ke $APP_DIR"
 
       - name: ⚙️ Bootstrap .env di server (tanpa menimpa setelan manual)
@@ -391,11 +457,12 @@ jobs:
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           APP_DIR: ${{ steps.cfg.outputs.app_dir }}
           # Secret dikirim lewat STDIN (heredoc), bukan argv → tidak terlihat
           # di `ps` server dan di-mask GitHub pada log.
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          # F-16: kredensial role aplikasi — disimpan terpisah di .env server.
+          POSTGRES_APP_PASSWORD: ${{ secrets.POSTGRES_APP_PASSWORD }}
           NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
           NEXTAUTH_URL: ${{ secrets.NEXTAUTH_URL }}
           NEXT_PUBLIC_SITE_URL: ${{ secrets.NEXT_PUBLIC_SITE_URL }}
@@ -416,11 +483,6 @@ jobs:
           ANICHIN_MIGRATE_IMAGE: ${{ steps.cfg.outputs.migrate_image }}
         run: |
           set -euo pipefail
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-
           # SITE_DOMAIN untuk Caddy: pakai secret bila ada, kalau tidak
           # diturunkan dari host NEXTAUTH_URL (dipakai di domain + www).
           if [ -z "${SITE_DOMAIN:-}" ]; then
@@ -433,10 +495,11 @@ jobs:
           # berada), lalu nilainya dikirim sebagai stdin ssh. Skrip di server
           # membaca KEY=VALUE dari stdin dan tidak pernah mencetak nilainya.
           # shellcheck disable=SC2087
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "cd '$APP_DIR' && ENV_FILE='$APP_DIR/.env' ./scripts/deploy-env.sh" <<EOF
           POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+          POSTGRES_APP_PASSWORD=$POSTGRES_APP_PASSWORD
           NEXTAUTH_SECRET=$NEXTAUTH_SECRET
           NEXTAUTH_URL=$NEXTAUTH_URL
           NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
@@ -462,7 +525,6 @@ jobs:
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
           APP_DIR: ${{ steps.cfg.outputs.app_dir }}
           ANICHIN_IMAGE: ${{ steps.cfg.outputs.web_image }}
@@ -472,12 +534,7 @@ jobs:
           SKIP_PULL: ${{ needs.preflight.outputs.registry == 'true' && '0' || '1' }}
         run: |
           set -euo pipefail
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "APP_DIR='$APP_DIR' ENVIRONMENT='$ENVIRONMENT' SKIP_PULL='$SKIP_PULL' ANICHIN_IMAGE='$ANICHIN_IMAGE' ANICHIN_MIGRATE_IMAGE='$ANICHIN_MIGRATE_IMAGE' bash -s" <<'REMOTE'
           set -euo pipefail

@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Mail, Lock, User, ArrowRight, Eye, EyeOff, Loader2, Flame, Check } from 'lucide-react';
 import { toast } from 'sonner';
+import { PASSWORD_MAX_BYTES, utf8ByteLength } from '@/lib/security';
 import Link from 'next/link';
 import { OAuthButtons } from '@/components/site/oauth-buttons';
 
@@ -29,6 +30,9 @@ function PasswordRequirements({ pwd }: { pwd: string }) {
     { label: 'Min. 6 karakter', pass: pwd.length >= 6 },
     { label: 'Ada huruf', pass: /[a-zA-Z]/.test(pwd) },
     { label: 'Ada angka', pass: /[0-9]/.test(pwd) },
+    // F-17: bcrypt hanya memakai 72 byte pertama — di atas itu tidak menambah
+    // keamanan, jadi dicegah sejak di form (server tetap memvalidasi).
+    { label: `Maks. ${PASSWORD_MAX_BYTES} byte`, pass: utf8ByteLength(pwd) <= PASSWORD_MAX_BYTES },
     { label: 'Min. 10 karakter (opsional)', pass: pwd.length >= 10, optional: true },
   ];
   return (
@@ -86,6 +90,7 @@ export default function RegisterPage() {
     return name.length >= 2 && name.length <= 30
       && email && !emailError
       && password.length >= 6 && /[a-zA-Z]/.test(password) && /[0-9]/.test(password)
+      && utf8ByteLength(password) <= PASSWORD_MAX_BYTES
       && passwordsMatch;
   }, [name, email, emailError, password, passwordsMatch]);
 
@@ -109,7 +114,18 @@ export default function RegisterPage() {
         return;
       }
 
-      await signIn('credentials', { email, password, redirect: false });
+      // Respons server sengaja seragam untuk email baru & email yang sudah
+      // terdaftar (F-12), jadi keberhasilannya diketahui dari percobaan login:
+      // akun baru langsung bisa masuk. Kalau gagal, kemungkinan email itu sudah
+      // terdaftar dengan password lain — pesannya tidak mengonfirmasi apa pun.
+      const signInRes = await signIn('credentials', { email, password, redirect: false });
+      if (signInRes?.error) {
+        toast.error(
+          'Kalau email ini sudah terdaftar, masuk memakai password lamamu (atau pakai "Lupa password"). Cek juga kotak masuk email kamu.'
+        );
+        setLoading(false);
+        return;
+      }
       toast.success('Daftar berhasil! Selamat datang.');
       router.push('/');
     } catch {

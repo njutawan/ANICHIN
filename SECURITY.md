@@ -170,6 +170,14 @@ terpusat (Zod).
 > dengan memasukkan password — membuat kode baru otomatis membatalkan semua kode
 > lama.
 
+> **Peran database & pipeline deploy:** aplikasi (`web`) memakai role PostgreSQL
+> terpisah dengan hak DML saja (`anichin_app` / `anichin_staging_app`) — bukan
+> role pemilik database yang dipakai `migrate` dan `backup-cron` — jadi celah di
+> aplikasi tidak bisa `DROP`/`ALTER`/`TRUNCATE` tabel. Pipeline deploy juga
+> memverifikasi host key SSH server (secret `DEPLOY_HOST_KEY`, opsi
+> `StrictHostKeyChecking=yes`) dan gagal keras bila host key belum dipin; tidak
+> ada lagi `ssh-keyscan`/trust-on-first-use.
+
 ## Menjaga kerahasiaan
 
 - Jangan menyimpan secret di issue, PR, atau chat.

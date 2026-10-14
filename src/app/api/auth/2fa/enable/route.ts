@@ -7,16 +7,15 @@ import {
   verifyTwoFactorToken,
   generateBackupCodes,
   encryptSecret,
-  getPendingSecret,
-  clearPendingSecret,
 } from '@/lib/two-factor';
+import { getPendingSecret, clearPendingSecret } from '@/lib/two-factor-pending';
 import { saveBackupCodes } from '@/lib/two-factor-backup';
 
 /**
  * POST /api/auth/2fa/enable
  *
  * Completes the 2FA enable flow:
- *   1. Pulls the pending secret from the in-memory store (set by /setup).
+ *   1. Pulls the pending secret from the pending store (set by /setup).
  *   2. Verifies the user-supplied 6-digit TOTP token against that secret.
  *   3. If valid: encrypts the secret, persists to user.twoFactorSecret + sets
  *      user.twoFactorEnabled = true.
@@ -95,8 +94,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Pull pending secret from in-memory store
-    const pending = getPendingSecret(userId);
+    // Pull pending secret dari store (Redis bila dikonfigurasi — F-11)
+    const pending = await getPendingSecret(userId);
     if (!pending) {
       return NextResponse.json(
         {
@@ -160,7 +159,7 @@ export async function POST(req: NextRequest) {
     });
 
     // Clear the pending secret — it's now persisted
-    clearPendingSecret(userId);
+    await clearPendingSecret(userId);
 
     if (process.env.NODE_ENV !== 'production') {
       logger.info(`[2fa/enable] 2FA enabled for user ${userId}`);

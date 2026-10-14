@@ -10,12 +10,18 @@ services:
     restart: unless-stopped
     environment:
       - POSTGRES_DB=anichin_staging
+      # Role migrasi/owner (hak DDL) — hanya dipakai service `migrate`.
       - POSTGRES_USER=anichin_staging
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (jangan pakai default yang bisa ditebak)}
+      # F-16: role aplikasi (DML saja) untuk service `web`.
+      - POSTGRES_APP_USER=anichin_staging_app
+      - POSTGRES_APP_PASSWORD=${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD is required (role aplikasi DML-only)}
     ports:
       - "127.0.0.1:5433:5432"  # Different port from prod
     volumes:
       - staging_db_data:/var/lib/postgresql/data
+      # F-16: sama seperti prod — pembuat role aplikasi.
+      - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U anichin_staging"]
       interval: 10s
@@ -44,6 +50,7 @@ services:
     command: ["bunx", "prisma", "migrate", "deploy"]
     environment:
       - NODE_ENV=production
+      # F-16: role migrasi (owner) — butuh DDL.
       - DATABASE_URL=postgresql://anichin_staging:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/anichin_staging?schema=public
     depends_on:
       db:
@@ -66,7 +73,8 @@ services:
       - "127.0.0.1:3001:3000"
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgresql://anichin_staging:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/anichin_staging?schema=public
+      # F-16: aplikasi memakai role DML-only, bukan role owner.
+      - DATABASE_URL=postgresql://anichin_staging_app:${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD is required (role aplikasi DML-only)}@db:5432/anichin_staging?schema=public
       - REDIS_URL=redis://redis:6379
       - NEXTAUTH_URL=${NEXTAUTH_URL:?NEXTAUTH_URL is required}
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:?NEXTAUTH_SECRET is required (staging juga memakai cookie/JWT bertanda tangan)}

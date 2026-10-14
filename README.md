@@ -258,7 +258,8 @@ Lihat [`.env.example`](./.env.example) untuk dokumentasi lengkap dengan komentar
 | `NODE_ENV`                |  ⬜   | Override environment (`production` / `development`)                 | `production`                                  |
 | `NEXT_TELEMETRY_DISABLED` |  ⬜   | Set `1` untuk opt-out Next.js telemetry                              | `1`                                          |
 | `PORT`                    |  ⬜   | Port server (default: 3000)                                          | `3000`                                       |
-| `POSTGRES_PASSWORD`       |  ⬜   | Password container PostgreSQL (untuk docker-compose)                 | `strong-random-password`                    |
+| `POSTGRES_PASSWORD`       |  ⬜   | Password role MIGRASI/owner PostgreSQL (docker-compose: migrate + backup) | `strong-random-password`                |
+| `POSTGRES_APP_PASSWORD`   |  ⬜   | Password role APLIKASI (DML saja) untuk `web` — wajib di prod/staging     | `openssl rand -hex 32`                  |
 | `SITE_DOMAIN`             |  ⬜   | Domain publik untuk Caddy reverse proxy (auto-HTTPS)                 | `anichin.id`                                 |
 
 ---
@@ -313,7 +314,8 @@ Cara paling cepat — sudah termasuk PostgreSQL + Redis + Caddy (auto-HTTPS):
 # Salin env example + isi nilai produksi
 cp .env.example .env
 # Wajib diisi: NEXTAUTH_URL (https di produksi), NEXTAUTH_SECRET (>=32 char),
-# POSTGRES_PASSWORD. DATABASE_URL dibentuk otomatis oleh compose.
+# POSTGRES_PASSWORD (role migrasi/owner) dan POSTGRES_APP_PASSWORD (role
+# aplikasi DML-only — audit F-16). DATABASE_URL dibentuk otomatis oleh compose.
 
 # Build + jalankan semua service
 # (nama file wajib: hanya docker-compose.prod.yml / staging.yml yang ada di repo)

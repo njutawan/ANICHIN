@@ -4,7 +4,7 @@ import { requireUser } from '@/lib/session';
 import { checkRateLimit, addRateLimitHeaders } from '@/lib/rate-limit';
 import { db } from '@/lib/db';
 import { compareSync } from 'bcryptjs';
-import { clearPendingSecret } from '@/lib/two-factor';
+import { clearPendingSecret } from '@/lib/two-factor-pending';
 import { clearBackupCodes } from '@/lib/two-factor-backup';
 
 /**
@@ -117,7 +117,7 @@ export async function POST(req: NextRequest) {
 
     // Also clear any stale pending secret (e.g. user started setup, then
     // decided to disable instead)
-    clearPendingSecret(userId);
+    await clearPendingSecret(userId);
 
     if (process.env.NODE_ENV !== 'production') {
       logger.info(`[2fa/disable] 2FA disabled for user ${userId}`);

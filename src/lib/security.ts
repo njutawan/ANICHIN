@@ -52,6 +52,67 @@ export function sanitizeUrl(url: string | undefined | null): string {
 }
 
 /**
+ * Sanitasi URL media (poster/banner/trailer) dari input admin — audit F-14.
+ *
+ * Sebelumnya nilai ini hanya `.trim()` + potong 1000 karakter, sehingga bisa
+ * tersimpan sebagai `javascript:`, `data:`, atau teks bebas. Nilainya dipakai
+ * di `<img src>`/`<video src>`, metadata Next.js, dan JSON-LD — jadi bentuk yang
+ * tidak terkontrol ikut menyebar ke halaman publik.
+ *
+ * Aturan:
+ *   - hanya `http://` / `https://` absolut, atau path situs yang diawali `/`
+ *     (menolak `//host` protocol-relative dan fragmen `#`),
+ *   - maksimum `maxLength` karakter (default 1000) — mencegah metadata raksasa,
+ *   - selain itu → `null` (pemanggil memutuskan 400 atau menyimpan null).
+ */
+export function sanitizeMediaUrl(value: unknown, maxLength = 1000): string | null {
+  if (value === null || value === undefined) return null;
+  const raw = String(value).trim();
+  if (!raw || raw.length > maxLength) return null;
+
+  // Path internal situs (bukan protocol-relative, bukan fragmen).
+  if (raw.startsWith('/') && !raw.startsWith('//')) return raw;
+  // `//host/path` protocol-relative: bentuk yang menunjuk host luar tanpa
+  // skema. sanitizeUrl meloloskannya (dianggap path), jadi ditolak di sini.
+  if (raw.startsWith('//')) return null;
+
+  const safe = sanitizeUrl(raw);
+  if (!safe) return null;
+  // sanitizeUrl juga meloloskan fragmen `#...` — tidak masuk akal untuk media.
+  if (safe.startsWith('#')) return null;
+  return safe;
+}
+
+/**
+ * Batas panjang password dalam byte UTF-8 (audit F-17).
+ *
+ * bcrypt hanya memakai 72 byte pertama dan **mengabaikan sisanya tanpa error**,
+ * jadi password 100 karakter sebenarnya sama kuatnya dengan 72 byte pertama.
+ * Register menerima 128 karakter dan reset 1024, sehingga pengguna bisa merasa
+ * memakai password panjang yang entropinya tidak pernah ikut ter-hash.
+ *
+ * Batas ini ditegakkan saat password **dibuat/diubah** (register + reset).
+ * Login sengaja tidak ikut dibatasi supaya akun lama yang passwordnya
+ * terlanjur panjang tetap bisa masuk.
+ */
+export const PASSWORD_MAX_BYTES = 72;
+
+/**
+ * Panjang byte UTF-8 dari sebuah string.
+ *
+ * Memakai TextEncoder (bukan Buffer) supaya aman dipakai di bundle browser
+ * kalau nanti dipakai untuk validasi di klien.
+ */
+export function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+/** Password melebihi batas bcrypt (72 byte)? */
+export function isPasswordTooLong(value: string): boolean {
+  return utf8ByteLength(value) > PASSWORD_MAX_BYTES;
+}
+
+/**
  * Truncate text to prevent DoS via extremely long inputs.
  *
  * Memotong per code point (bukan per code unit) supaya emoji / karakter

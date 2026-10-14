@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Lock, Eye, EyeOff, Loader2, Flame, ArrowRight, Check } from 'lucide-react';
 import { toast } from 'sonner';
+import { PASSWORD_MAX_BYTES, utf8ByteLength } from '@/lib/security';
 import Link from 'next/link';
 
 function getPasswordStrength(pwd: string): { score: number; label: string; color: string } {
@@ -25,6 +26,8 @@ function PasswordRequirements({ pwd }: { pwd: string }) {
     { label: 'Min. 6 karakter', pass: pwd.length >= 6 },
     { label: 'Ada huruf', pass: /[a-zA-Z]/.test(pwd) },
     { label: 'Ada angka', pass: /[0-9]/.test(pwd) },
+    // F-17: batas bcrypt 72 byte.
+    { label: `Maks. ${PASSWORD_MAX_BYTES} byte`, pass: utf8ByteLength(pwd) <= PASSWORD_MAX_BYTES },
     { label: 'Min. 10 karakter (opsional)', pass: pwd.length >= 10, optional: true },
   ];
   return (
@@ -63,6 +66,7 @@ export default function ResetPasswordPage() {
       password.length >= 6 &&
       /[a-zA-Z]/.test(password) &&
       /[0-9]/.test(password) &&
+      utf8ByteLength(password) <= PASSWORD_MAX_BYTES &&
       password === confirmPassword
     );
   }, [token, password, confirmPassword]);

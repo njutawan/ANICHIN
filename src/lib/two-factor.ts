@@ -10,6 +10,9 @@
  *  - QR code rendering as a data: URL (qrcode package)
  *  - AES-256-GCM encryption for storing the TOTP secret at rest
  *
+ * Pending secret (handshake setup → enable) TIDAK lagi disimpan di modul ini:
+ * lihat src/lib/two-factor-pending.ts (Redis bila REDIS_URL diset, kalau tidak
+ * fallback in-memory).
  * Environment:
  *   TWO_FACTOR_ENCRYPTION_KEY — 64-char hex string (32 bytes).
  *   If unset in dev, a random key is generated once per process and a warning
@@ -256,66 +259,4 @@ export function decryptSecret(payload: string): string {
   decipher.setAuthTag(authTag);
   const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   return decrypted.toString('utf8');
-}
-
-// ---------------------------------------------------------------------------
-// In-memory pending-secret store (for the setup → enable handshake)
-// ---------------------------------------------------------------------------
-
-export interface PendingSecret {
-  secret: string;
-  otpauthUrl: string;
-  expiresAt: number;
-}
-
-const PENDING_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-// Module-level Map survives across hot reloads within the same process.
-// Keyed by user ID. For multi-instance prod deployments, swap this out for a
-// Redis-backed store (same pattern as rate-limit-store).
-const pendingSecrets = new Map<string, PendingSecret>();
-
-function sweepExpired(): void {
-  const now = Date.now();
-  for (const [k, v] of pendingSecrets.entries()) {
-    if (v.expiresAt < now) pendingSecrets.delete(k);
-  }
-}
-
-/**
- * Stash a freshly generated TOTP secret for a user, valid for 5 minutes.
- * The user must call /enable with a valid 6-digit token before the TTL expires.
- */
-export function setPendingSecret(
-  userId: string,
-  secret: string,
-  otpauthUrl: string
-): void {
-  sweepExpired();
-  pendingSecrets.set(userId, {
-    secret,
-    otpauthUrl,
-    expiresAt: Date.now() + PENDING_TTL_MS,
-  });
-}
-
-/**
- * Retrieve (without removing) the pending secret for a user.
- * Returns null if no entry exists or it has expired.
- */
-export function getPendingSecret(userId: string): PendingSecret | null {
-  const entry = pendingSecrets.get(userId);
-  if (!entry) return null;
-  if (entry.expiresAt < Date.now()) {
-    pendingSecrets.delete(userId);
-    return null;
-  }
-  return entry;
-}
-
-/**
- * Remove the pending secret after a successful enable (or user cancel).
- */
-export function clearPendingSecret(userId: string): void {
-  pendingSecrets.delete(userId);
 }

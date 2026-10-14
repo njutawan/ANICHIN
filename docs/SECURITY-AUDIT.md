@@ -3,7 +3,7 @@
 **Tanggal:** 2026-10-14
 **Skop:** seluruh repo `njutawan/ANICHIN` (Next.js 16 App Router + NextAuth v4 + Prisma/PostgreSQL + Docker/Caddy + GitHub Actions)
 **Commit dasar:** `eb52573` (branch `arena/c4ede340-anichin`)
-**Terakhir diperbarui:** 2026-10-15 — F-07 & F-19 (`src/lib/auth.ts`, `src/app/auth/login/page.tsx`), F-10 (`src/lib/two-factor*.ts`, migrasi `20261015140000`)
+**Terakhir diperbarui:** 2026-10-15 — **batch penutup F-11…F-17** (`src/lib/redis-client.ts`, `src/lib/two-factor-pending.ts`, `src/app/api/auth/register/route.ts`, `src/app/api/health/route.ts`, `src/lib/security.ts`, `src/app/api/admin/anime/**`, `.github/workflows/{deploy,staging}.yml`, `docker-compose.{prod,staging}.yml`, `scripts/postgres-init/10-app-role.sh`, `scripts/compose-deploy.sh`). Seluruh 19 temuan kini tertutup.
 **Metode:** pembacaan kode baris-per-baris pada jalur auth/data/DB/deploy, pemindaian seluruh objek Git (344 blob, semua branch), `npm audit`, dan menjalankan test suite.
 
 ---
@@ -17,32 +17,32 @@
 | 3 | No hardcode secret | ✅ | Pemindaian pola (AWS/GitHub/Google/private key/DSN) hanya menemukan placeholder di `.env.example`, docs, dan CI (`ci-test-secret…`). |
 | 4 | Cek secret di git | ✅ | Seluruh riwayat (344 blob, semua branch) dipindai: hanya password dev/CI lokal (`anichin:anichin@localhost`) dan contoh di dokumentasi. Tidak ada rahasia produksi. |
 | 5 | Debug mode OFF | ✅ | `productionBrowserSourceMaps:false`, `poweredByHeader:false`, `X-Powered-By` dihapus di proxy, logger ber-`LOG_LEVEL` (default `info` di prod), Sentry hanya aktif di prod/`SENTRY_DEBUG`. |
-| 6 | Error jangan bocor | ✅ | Semua route membalas pesan generik; `err.message` hanya masuk `logger` server-side; `/api/health` mengembalikan `DB_UNAVAILABLE` (bukan pesan Prisma); `error.tsx`/`global-error.tsx` menyembunyikan `message` di produksi. **F-02 (token di log) diperbaiki.** |
+| 6 | Error jangan bocor | ✅ | Semua route membalas pesan generik; `err.message` hanya masuk `logger` server-side; `/api/health` mengembalikan `DB_UNAVAILABLE` (bukan pesan Prisma); `error.tsx`/`global-error.tsx` menyembunyikan `message` di produksi. **F-02 (token di log) & F-13 (`/api/health` berhenti membocorkan versi/environment/RSS) diperbaiki.** |
 | 7 | Validasi input | ✅ | Zod terpusat (`src/lib/validation.ts`), body-size guard 4–8 KB, whitelist enum (`type/status/season`), rentang angka, slug regex, paginasi `limit` dibatasi. |
-| 8 | Sanitasi input | ✅ | `sanitizeUserText` (strip tag stabil + buang kontrol/zero-width + truncate per code point) dipakai komentar & ulasan; nama tampilan `sanitizeDisplayName`; `sanitizeForJSONLD` untuk JSON-LD. **F-14 (URL admin) rekomendasi.** |
+| 8 | Sanitasi input | ✅ | `sanitizeUserText` (strip tag stabil + buang kontrol/zero-width + truncate per code point) dipakai komentar & ulasan; nama tampilan `sanitizeDisplayName`; `sanitizeForJSONLD` untuk JSON-LD. **F-14 (URL media admin) diperbaiki** — `sanitizeMediaUrl()` hanya menerima `http(s)` absolut atau path internal. |
 | 9 | Anti SQL injection | ✅ | Prisma parameterized di semua query; satu-satunya raw SQL adalah `SELECT 1` (health) & `SELECT 1` (migrasi) — tanpa input pengguna. Tidak ada `$queryRawUnsafe`. |
 | 10 | Anti XSS | ✅ | Tidak ada `innerHTML`/`eval`/`new Function` di produksi; `dangerouslySetInnerHTML` hanya untuk JSON-LD yang di-escape + nonce; CSP nonce (`'strict-dynamic'`) di produksi. **F-04 (domain skrip asing) diperbaiki.** |
 | 11 | Server-side auth | ✅ | Semua route sensitif memakai `requireUser`/`requireAdmin` (bukan cek di klien); NextAuth JWT diverifikasi di server. **F-03 (oracle TOTP) & F-19 (bypass 2FA lewat OAuth) diperbaiki.** |
 | 12 | Cek akses user | ✅ | IDOR diuji: DELETE komentar/ulasan hanya pemilik atau admin (403); data user lain tidak pernah dikembalikan (select minimal, tanpa `password`). |
 | 13 | Role admin aman | ✅ | `/admin` dijaga proxy (JWT role) + guard server-side di `admin/layout.tsx` + `requireAdmin` di setiap route `/api/admin/*` (5/5 file) + noindex; admin tidak bisa menurunkan dirinya sendiri; promosi/demosi mencabut sesi lama & tercatat di log. **F-18 & F-07 diperbaiki** — penautan akun OAuth hanya jalan bila provider memverifikasi emailnya, jadi akun admin tidak bisa diambil alih lewat email OAuth. |
-| 14 | DB jangan public | ✅ | Compose mengikat `127.0.0.1:5432` / `127.0.0.1:6379` / `127.0.0.1:3000`; hanya Caddy yang publik; `POSTGRES_PASSWORD` wajib (`:?`); volume terpisah; WAL archiving (yang dulu bisa memenuhi disk) sengaja dihapus. |
-| 15 | DB permission ketat | ⚠️ | Kredensial kuat & port lokal sudah benar, tetapi aplikasi memakai role **pemilik DB** (bisa DDL). Lihat **F-16** (least privilege). |
-| 16 | Hash password | ✅ | bcrypt cost 10 di register, reset, dan user OAuth (password acak 32 byte). **F-08 (kunci 2FA salah format) diperbaiki.** |
-| 17 | Session aman | ✅ | Cookie `httpOnly` + `SameSite=Lax` + `Secure` + prefix `__Secure-`/`__Host-` (prod), JWT 7 hari / sesi 30 hari, secret produksi wajib (tanpa fallback), **pencabutan sesi** lewat `User.sessionVersion` (F-06) + nama cookie terpusat (F-09/F-18), dan **kode cadangan 2FA** tersimpan sebagai hash + sekali pakai (F-10) sebagai jalur pemulihan. |
-| 18 | Reset password aman | ✅ | Token 32 byte CSPRNG, sekali pakai, kedaluwarsa 1 jam, semua token lain dibatalkan dalam transaksi, pesan generik anti-enumeration, dan **semua sesi lama dicabut** (`sessionVersion`) saat password diganti. **F-02 & template email diperbaiki.** |
+| 14 | DB jangan public | ✅ | Compose mengikat `127.0.0.1:5432` / `127.0.0.1:6379` / `127.0.0.1:3000`; hanya Caddy yang publik; `POSTGRES_PASSWORD` wajib (`:?`); volume terpisah; WAL archiving (yang dulu bisa memenuhi disk) sengaja dihapus. **F-15: host key SSH deploy kini dipin (tidak ada lagi `StrictHostKeyChecking=no`).** |
+| 15 | DB permission ketat | ✅ | **F-16 diperbaiki:** aplikasi (`web`) memakai role terpisah **DML saja** (`anichin_app`), sedangkan `migrate`/`backup-cron` tetap role owner dengan kredensial berbeda; port lokal, kredensial kuat, dan `REVOKE CREATE` di schema sudah benar. |
+| 16 | Hash password | ✅ | bcrypt cost 10 di register, reset, dan user OAuth (password acak 32 byte). **F-08 (kunci 2FA salah format) diperbaiki.** **F-17: batas keras 72 byte (batas bcrypt) ditegakkan di register & reset.** |
+| 17 | Session aman | ✅ | Cookie `httpOnly` + `SameSite=Lax` + `Secure` + prefix `__Secure-`/`__Host-` (prod), JWT 7 hari / sesi 30 hari, secret produksi wajib (tanpa fallback), **pencabutan sesi** lewat `User.sessionVersion` (F-06) + nama cookie terpusat (F-09/F-18), dan **kode cadangan 2FA** tersimpan sebagai hash + sekali pakai (F-10) sebagai jalur pemulihan; **pending secret 2FA** kini di Redis lintas instance (F-11). |
+| 18 | Reset password aman | ✅ | Token 32 byte CSPRNG, sekali pakai, kedaluwarsa 1 jam, semua token lain dibatalkan dalam transaksi, pesan generik anti-enumeration, dan **semua sesi lama dicabut** (`sessionVersion`) saat password diganti. **F-02 & template email diperbaiki.** **F-12: pendaftaran juga anti-enumeration (respons seragam + notifikasi email).** |
 | 19 | Batasi file upload | ➖ | **Tidak ada fitur upload** (tidak ada `formData()`/multipart/tulis file dari request). Yang ada hanya URL gambar eksternal dari admin (lihat F-14) dan optimizer `next/image` yang host-nya sudah di-allowlist. |
 
 **Hasil perintah verifikasi**
 
 ```
 npm audit --omit=dev   → 0 vulnerabilities (311 dependensi produksi)
-npx vitest run         → 396 test lulus (43 dari 44 file); 1 suite butuh `prisma generate`
+npx vitest run         → 448 test lulus (47 dari 48 file); 1 suite butuh `prisma generate`
                          (sandbox ini tidak bisa mengunduh engine Prisma; di CI normal)
 npx tsc --noEmit       → bersih
 npx eslint .           → bersih
 ```
 
-**Perubahan kode pada audit ini:** **12 temuan diperbaiki** (F-01…F-10, F-18, F-19), **7 masih terbuka** (F-11…F-17), ditambah **101 test regresi** baru (14 pada audit awal, 27 pada lanjutan F-06/F-18, 22 pada lanjutan F-07/F-19, 38 pada lanjutan F-10).
+**Perubahan kode pada audit ini:** **19 temuan diperbaiki** (F-01…F-19) — **tidak ada temuan terbuka** — ditambah **153 test regresi** baru (14 pada audit awal, 27 pada lanjutan F-06/F-18, 22 pada lanjutan F-07/F-19, 38 pada lanjutan F-10, 52 pada batch penutup F-11…F-17).
 
 ---
 
@@ -155,17 +155,66 @@ Prefix hilang karena `cookies` dikonfigurasi manual di `authOptions`. Sekarang `
 **Catatan:** kode cadangan sengaja tidak kedaluwarsa (sama seperti GitHub/Google) — selama belum dipakai ia tetap berlaku; regenerate kapan saja membatalkan semuanya. Regenerate tidak mencabut sesi (`sessionVersion`) karena kode cadangan tidak menjaga sesi berjalan.
 **Regression test:** `src/lib/two-factor-backup.test.ts` (10), `src/lib/auth-2fa-login.test.ts` (11 — TOTP tetap bisa login, kode cadangan sekali pakai, huruf kecil/tanpa dash, error DB fail closed, akun terkunci), `src/app/api/auth/2fa/backup-codes/route.test.ts` (9), tambahan `src/lib/two-factor.test.ts` (8).
 
-### Dilaporkan (belum diubah — butuh keputusan/uji lanjutan)
+### Batch penutup (F-11…F-17) — seluruhnya diperbaiki
 
-| ID | Sev | Temuan | Bukti | Rekomendasi |
-|---|:--:|---|---|---|
-| **F-11** | Rendah | Pending secret 2FA disimpan di `Map` in-memory (TTL 5 menit) | `src/lib/two-factor.ts` | Multi-instance tanpa sticky session: pindahkan ke Redis (pola `rate-limit-store.ts`) |
-| **F-12** | Rendah | `POST /api/auth/register` membocorkan keberadaan email (`409 "Email sudah terdaftar."`), padahal `forgot-password` sengaja anti-enumeration | `src/app/api/auth/register/route.ts` | Bila ingin tertutup: balas 201/200 + kirim email "email sudah terdaftar" (butuh SMTP) |
-| **F-13** | Rendah | `/api/health` publik mengembalikan `version`, `environment`, `uptime`, dan RSS (di field `latencyMs`) | `src/app/api/health/route.ts` | Hapus `version`/`environment` (atau batasi ke jaringan internal); gunakan `rssMb` alih-alih menaruh byte di `latencyMs` |
-| **F-14** | Rendah | URL `poster`/`banner`/`trailer` dari `POST/PUT /api/admin/anime` disimpan tanpa validasi skema (hanya `.trim()`/potong 1000 char). Rendered sebagai `<img>`/`<video>` sehingga `javascript:` tidak tereksekusi, tapi nilainya tetap masuk metadata/JSON-LD & `next/image` | `src/app/api/admin/anime/route.ts`, `src/app/api/admin/anime/[id]/route.ts` | Validasi dengan `sanitizeUrl()`/allowlist host + tolak skema selain `http(s)` |
-| **F-15** | Rendah | Pipeline deploy memakai `ssh-keyscan … \|\| true` + `ssh -o StrictHostKeyChecking=no` → host key tidak diverifikasi | `.github/workflows/deploy.yml` (4 langkah SSH) | Simpan host key sebagai secret (`DEPLOY_HOST_KEY`) dan tulis ke `known_hosts`, lalu `StrictHostKeyChecking=yes`; aktifkan juga *required reviewers* untuk environment produksi |
-| **F-16** | Info | Aplikasi terhubung ke PostgreSQL memakai role **pemilik** DB (`anichin`) → bisa DDL/DROP; migration memakai kredensial yang sama | `docker-compose.prod.yml` | Buat role aplikasi terbatas (DML saja) + role migrasi terpisah dengan kredensial berbeda |
-| **F-17** | Info | bcrypt memotong password pada 72 byte, sedangkan register menerima 128 karakter (dan reset 1024) | `src/app/api/auth/register/route.ts`, `src/lib/auth.ts` | Batasi maksimum 72 byte, atau pre-hash (SHA-256 → base64) sebelum bcrypt; pastikan konsisten di register & reset |
+#### F-11 — [Rendah] Pending secret 2FA disimpan di `Map` in-memory ✅ DIPERBAIKI
+
+**Bukti:** `src/lib/two-factor.ts` menyimpan secret hasil `/setup` di sebuah `Map` dengan TTL 5 menit. Pada deployment multi-instance (atau restart) `POST /2fa/enable` bisa mendarat di proses lain tanpa secret itu → handshake gagal, dan pengguna terjebak: 2FA belum aktif tetapi UI mengira sudah tahap verifikasi.
+**Perbaikan:**
+1. **Klien Redis bersama** — modul baru `src/lib/redis-client.ts`: satu koneksi ioredis lazy per proses (`getRedis()`, `isRedisAvailable()`, `isRedisConfigured()`), dipakai bersama rate limiting & pending store. `REDIS_URL` kosong → `null`; inisialisasi gagal → warning + `null` (fail-soft, bukan crash); `retryStrategy` `min(times*200, 2000)`, `connectTimeout` 5 s, log koneksi hanya di non-produksi. Tidak ada instance ioredis kedua di repo.
+2. **Penyimpanan pending yang lintas instance** — modul baru `src/lib/two-factor-pending.ts`: key `tfa:pending:<userId>`, TTL Redis (`SET … PX`, 5 menit), nilai = `encryptSecret(JSON.stringify({secret, otpauthUrl, expiresAt}))` sehingga **Redis tidak pernah menerima secret TOTP plaintext**. Payload rusak/kadaluwarsa → entri dianggap tidak ada dan dibuang; fallback in-memory tetap ada untuk dev/single instance.
+3. `src/lib/two-factor.ts` tidak lagi menyimpan pending secret (hanya primitif TOTP/AES/kode cadangan); `/api/auth/2fa/{setup,enable,disable}` meng-`await` API baru; `rate-limit-store.ts` memakai klien bersama (kode klien lokal dihapus).
+**Regression test:** `src/lib/two-factor-pending.test.ts` (10 — fallback in-memory & TTL, isolasi antar user, Redis: isi bukan plaintext, keterbacaan lintas instance, payload rusak, error Redis tidak melempar).
+
+#### F-12 — [Rendah] `POST /api/auth/register` membocorkan keberadaan email ✅ DIPERBAIKI
+
+**Bukti:** balasan `409 "Email sudah terdaftar."` (baik dari pre-check maupun dari tangkapan `P2002`) membuat endpoint ini bisa dipakai memeriksa apakah sebuah email punya akun — padahal `forgot-password` sengaja anti-enumeration.
+**Perbaikan (sesuai rekomendasi audit):**
+1. Respons untuk email baru **dan** email yang sudah terdaftar kini identik: `201 { registered: true }` (tidak lagi memuat `id`/`email`/`name`, yang dulu hanya muncul di jalur sukses). Jalur balapan `P2002` memakai respons yang sama.
+2. Informasi diarahkan ke pemilik email yang sah, bukan ke pendaftar: template baru `sendAccountExistsEmail()` (tanpa token; di non-produksi hanya tercatat di log) berisi tautan `/auth/login` + saran "Lupa password". Kegagalan SMTP tidak mengubah respons (best-effort, tidak pernah menggagalkan pendaftaran).
+3. Halaman `/auth/register` tidak lagi menampilkan toast sukses setelah auto-`signIn` yang gagal: bila login tidak lolos (email sudah terdaftar dengan password lain) pesannya netral — "kalau email ini sudah terdaftar, masuk memakai password lama / lupa password".
+**Regression test:** `src/app/api/auth/register/route.test.ts` (10 — status & body identik untuk kedua jalur, notifikasi hanya untuk email terdaftar, `P2002` juga 201, SMTP gagal tidak mengubah hasil, error server tetap generik).
+
+#### F-13 — [Rendah] `/api/health` publik mengembalikan versi, environment, dan RSS ✅ DIPERBAIKI
+
+**Bukti:** body memuat `version` (`npm_package_version`), `environment` (`NODE_ENV`) dan RSS proses yang diselipkan ke `checks.memory.latencyMs` — peta versi (CVE yang berlaku) + penanda staging/produksi di endpoint tanpa auth.
+**Perbaikan:** `version` & `environment` dihapus; RSS dilaporkan sebagai `rssMb` (angka MB yang jujur, field `latencyMs` yang menyesatkan dihapus); Redis cukup `{ status, configured }` tanpa "latensi" palsu 0/1; error DB tetap `DB_UNAVAILABLE`; header `no-store`/`Pragma`/`Expires` dipertahankan.
+**Regression test:** `src/app/api/health/route.test.ts` (13 — termasuk assertion baru: `version`/`environment` tidak ada, nama environment tidak muncul di body, `rssMb` berupa angka).
+
+#### F-14 — [Rendah] URL media admin tidak divalidasi skema ✅ DIPERBAIKI
+
+**Bukti:** `poster` hanya dicek "tidak kosong", `banner`/`trailer` lewat `optionalStr()` (trim + potong 1000 char). Nilainya masuk `<img>`/`<video>`, metadata Next.js, dan JSON-LD.
+**Perbaikan:** helper baru `sanitizeMediaUrl()` di `src/lib/security.ts` (di atas `sanitizeUrl`): hanya `http(s)://` absolut atau path internal yang diawali `/` (menolak `//host`), menolak `javascript:`/`data:`/`vbscript:`/`file:` dan fragmen, panjang ≤1000 karakter, selain itu `null`. Dipakai di `POST /api/admin/anime` (poster tidak valid → 400 dengan pesan yang menjelaskan aturan) dan `PUT/PATCH /api/admin/anime/[id]` (poster tidak valid → 400; `banner`/`trailer` tidak valid → `null`).
+**Regression test:** `src/lib/security.test.ts` (blok `sanitizeMediaUrl`, +6 → 38 test file ini).
+
+#### F-15 — [Rendah] Host key SSH tidak diverifikasi di pipeline deploy ✅ DIPERBAIKI
+
+**Bukti:** `.github/workflows/deploy.yml` (4 langkah SSH) memakai `ssh-keyscan -H "$DEPLOY_HOST" >> known_hosts 2>/dev/null || true` + `ssh -o StrictHostKeyChecking=no`: kegagalan keyscan ditelan dan verifikasi host key dimatikan total → runner menerima kunci apa pun yang menjawab di `DEPLOY_HOST`, padahal langkah yang sama mengirim `.env` (sesi, OAuth, SMTP) dan kredensial registry. Pola sama ditemukan di `.github/workflows/staging.yml`.
+**Perbaikan:**
+1. Secret baru `DEPLOY_HOST_KEY` (staging: `STAGING_DEPLOY_HOST_KEY`) berisi baris `known_hosts` server. Langkah baru **🔐 Siapkan SSH** menulisnya ke `~/.ssh/known_hosts`, memverifikasi entri host (`ssh-keygen -F`), mencetak fingerprint, dan **gagal keras** (`exit 1` + annotation) bila secret kosong/tidak cocok dengan `DEPLOY_HOST`.
+2. Semua `ssh`/`scp` memakai `StrictHostKeyChecking=yes` + `UserKnownHostsFile="$HOME/.ssh/known_hosts"` (4 di produksi + 3 di staging); `ssh-keyscan` dan `|| true` dihapus; preflight memberi annotation khusus saat `DEPLOY_HOST` terisi tanpa `DEPLOY_HOST_KEY`.
+3. Penulisan kunci deploy hanya terjadi sekali (langkah Siapkan SSH), bukan diulang di setiap langkah; `docs/DEPLOYMENT.md` memuat cara mengambil + mencocokkan fingerprint sebelum menyimpan secret.
+**Catatan operator:** aktifkan *Required reviewers* pada environment `production` (Settings → Environments) — setting repo, tidak bisa dari kode.
+**Regression test:** `src/lib/deploy-workflow.test.ts` (14 — menolak `StrictHostKeyChecking=no`/`accept-new`, `ssh-keyscan`, dan penulisan `known_hosts` di luar langkah setup, pada **kedua** workflow).
+
+#### F-16 — [Info] Aplikasi memakai role pemilik DB (bisa DDL) ✅ DIPERBAIKI
+
+**Bukti:** `docker-compose.prod.yml`/`staging.yml` memberi `web` `DATABASE_URL` dari `POSTGRES_USER`/`POSTGRES_PASSWORD` — role yang juga memiliki database dan dipakai `migrate`. Satu bug/RCE di aplikasi cukup untuk `DROP`/`ALTER`/`TRUNCATE`, dan satu kredensial bocor berarti seluruh data.
+**Perbaikan (sesuai rekomendasi: role aplikasi DML + role migrasi terpisah):**
+1. Skrip baru `scripts/postgres-init/10-app-role.sh` (idempoten) membuat role aplikasi (`anichin_app` / `anichin_staging_app`) dengan `LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`, hanya `CONNECT` + `USAGE` pada schema `public` + `SELECT/INSERT/UPDATE/DELETE` pada tabel & `USAGE/SELECT` pada sequence, plus `REVOKE CREATE ON SCHEMA public`. `ALTER DEFAULT PRIVILEGES FOR ROLE <owner>` memastikan tabel hasil migrasi **berikutnya** otomatis bisa diakses aplikasi.
+2. Password tidak pernah masuk argv atau dirangkai ke SQL: dibaca dengan `\getenv` lalu di-quote di server dengan `format(%I, %L)` + `\gexec`.
+3. `docker-compose.{prod,staging}.yml`: `web` memakai `postgresql://…_app:${POSTGRES_APP_PASSWORD:?}` sedangkan `migrate` & `backup-cron` tetap role owner (`POSTGRES_PASSWORD`) — dua kredensial berbeda; skrip init di-mount ke `/docker-entrypoint-initdb.d` (jalan otomatis pada volume kosong).
+4. `scripts/compose-deploy.sh` menjalankan skrip itu lewat `docker compose exec` **sebelum** `up` (setelah db siap) sehingga database yang sudah ada ikut ter-provision — bukan hanya instalasi baru; kegagalan provisioning menghentikan deploy, bukan menghasilkan `web` yang tidak bisa konek.
+5. Kredensial baru diteruskan pipeline: secret `POSTGRES_APP_PASSWORD` (produksi) & `STAGING_POSTGRES_APP_PASSWORD` (staging) masuk ke `.env` server; `.env.example`, `README.md`, `docs/DEPLOYMENT.md`, `docs/PRODUCTION-OAUTH.md`, dan `scripts/setup-github-secrets.sh` diperbarui.
+**Regression test:** `src/lib/postgres-roles.test.ts` (10 — `web` ≠ `migrate` per compose, guard `${POSTGRES_APP_PASSWORD:?}`, mount skrip, isi skrip hanya DML + tanpa hak istimewa, urutan provisioning sebelum `up`).
+
+#### F-17 — [Info] bcrypt memotong password pada 72 byte ✅ DIPERBAIKI
+
+**Bukti:** register menerima 128 karakter dan reset 1024 karakter, sedangkan bcrypt hanya memakai 72 byte pertama — password panjang memberi rasa aman yang tidak nyata (dan password non-ASCII jauh lebih cepat mencapai batas itu).
+**Perbaikan (opsi pertama rekomendasi audit: batasi maksimum 72 byte):** konstanta `PASSWORD_MAX_BYTES = 72` + `utf8ByteLength()`/`isPasswordTooLong()` di `src/lib/security.ts`; register & reset-password menolak >72 byte dengan pesan yang menyebut batasnya (bukan lagi "6-1024 karakter"); halaman register & reset memakai penghitungan byte yang sama sehingga tombol submit sudah tidak aktif. **Login sengaja tidak dibatasi** supaya akun lama yang passwordnya terlanjur panjang tetap bisa masuk.
+**Regression test:** `src/lib/security.test.ts` (blok batas bcrypt) + `src/app/api/auth/register/route.test.ts` (72 byte lolos, 73 ditolak, `é` dihitung per byte, 100 karakter ASCII ditolak meski <128 karakter).
+
+---
 
 ---
 
@@ -174,28 +223,40 @@ Prefix hilang karena `cookies` dikonfigurasi manual di `authOptions`. Sekarang `
 - **Rahasia & env:** `.gitignore` (`.env*`, `!.env.example`, `.env.admin`, `/logs/`, `/pgdata/`), `.dockerignore` mengecualikan `.env*`; `scripts/deploy-env.sh` menulis `.env` dari stdin dengan `umask 077` + `chmod 600` dan tidak pernah mencetak nilai; `setup-github-secrets.sh` menyimpan backup di `$HOME` (di luar repo) dengan `chmod 600`; CI memakai `permissions: contents: read` dan action dipin ke SHA.
 - **Autentikasi:** NextAuth v4 kredensial + OAuth opsional; `resolveSecret()` melempar error di produksi bila `NEXTAUTH_SECRET` hilang/<16 char; lockout 5 gagal/15 menit (Redis/in-memory) dengan kunci `email+IP`; `getClientIp()` hanya mempercayai header edge atau entri XFF dari kanan sejumlah `TRUSTED_PROXY_HOPS`; Caddy menimpa `X-Forwarded-For` dengan IP soket → spoofing header tidak bisa melewati rate limit/lockout.
 - **Otorisasi:** `src/lib/session.ts` (`requireUser`/`requireAdmin`) dipakai di semua route yang butuh; 5/5 file `src/app/api/admin/**` memanggil `requireAdmin`; proxy memblokir `/admin*` untuk non-admin pada Edge (JWT), `/admin` juga `noindex`; admin tidak bisa menurunkan role sendiri.
+- **Redis bersama (setelah F-11):** `src/lib/redis-client.ts` adalah satu-satunya klien ioredis — dipakai `rate-limit-store.ts` dan `two-factor-pending.ts`; tanpa `REDIS_URL` keduanya jatuh ke in-memory (rate limit/lockout per proses, pending 2FA per proses) dan inisialisasi gagal hanya menghasilkan warning, bukan crash.
 - **Rate limit & audit:** tier `auth` 20 / `search` 30 / `read` 60 / `expensive` 10 per menit per IP, respons 429 + `Retry-After` + header `X-RateLimit-*`; audit log `logs/audit.jsonl` (rotasi 10 MB, dilewati di serverless) dengan IP di-HMAC-SHA256 memakai `IP_HASH_SALT`.
-- **2FA:** TOTP `otplib` (±1 langkah), secret terenkripsi AES-256-GCM (`iv:authTag:ciphertext`), `/enable` mewajibkan pending secret + kode valid, `/disable` mewajibkan password, dekripsi gagal → fail closed; akun ber-2FA tidak bisa masuk lewat OAuth (F-19); **kode cadangan sekali pakai** disimpan sebagai hash bcrypt di `TwoFactorBackupCode` (F-10) dan bisa dipakai login sebagai pengganti TOTP, tetap di dalam lockout login.
+- **2FA:** TOTP `otplib` (±1 langkah), secret terenkripsi AES-256-GCM (`iv:authTag:ciphertext`), `/enable` mewajibkan pending secret + kode valid, `/disable` mewajibkan password, dekripsi gagal → fail closed; akun ber-2FA tidak bisa masuk lewat OAuth (F-19); **kode cadangan sekali pakai** disimpan sebagai hash bcrypt di `TwoFactorBackupCode` (F-10) dan bisa dipakai login sebagai pengganti TOTP, tetap di dalam lockout login; pending secret handshake `/setup`→`/enable` disimpan **terenkripsi di Redis** (`tfa:pending:<userId>`, TTL 5 menit) sehingga aman di deployment multi-instance (F-11).
 - **Penautan akun OAuth (setelah F-07/F-19):** tanpa adapter NextAuth (flag *dangerous* dihapus & dikomentari), callback `signIn` sendiri yang mengatur: hanya `account.type === 'oauth'`, email wajib terverifikasi provider (Google `email_verified`, GitHub `/user/emails` dengan `verified:true`, fail closed untuk provider asing/error), akun ber-2FA ditolak, dan kegagalan DB → tolak (kecuali `P2002` balapan create).
 - **Sesi (setelah F-06/F-09/F-18):** cookie `httpOnly` + `SameSite=Lax` + `Secure` + prefix `__Secure-`/`__Host-`; nama cookie terpusat di `src/lib/auth-cookies.ts` sehingga penulis (NextAuth) & pembaca (`getToken`) tidak bisa berbeda lagi; klaim JWT memuat `id`/`role`/`sv`; `User.sessionVersion` divalidasi ulang ke DB (default ≤60 detik, `SESSION_REVALIDATE_SECONDS`) dan dinaikkan saat reset password, perubahan role, dan penonaktifan 2FA; guard server-side (`src/lib/session.ts`) fail closed untuk sesi yang dicabut; `/admin` dijaga 3 lapis (proxy Edge → `admin/layout.tsx` yang DB-validated → `requireAdmin()` di tiap API).
-- **DB & infra:** port DB/Redis/web hanya `127.0.0.1`; `POSTGRES_PASSWORD` wajib; container app berjalan sebagai `nextjs` (uid 1001, non-root); HEALTHCHECK; log container dibatasi (`max-size`/`max-file`); backup harian 02:00 retensi 14 hari.
+- **Pendaftaran anti-enumeration (setelah F-12):** `POST /api/auth/register` selalu membalas `201 { registered: true }` (email baru, email terdaftar, maupun `P2002`) — informasi hanya dikirim ke pemilik email lewat `sendAccountExistsEmail()`; halaman register menampilkan pesan netral bila auto-login gagal.
+- **Permukaan informasi (setelah F-13):** `/api/health` hanya memuat `status`, `uptime`, `timestamp`, `checks.{db,memory,redis}` — tanpa versi aplikasi, environment, atau angka RSS yang disamarkan sebagai latensi.
+- **URL media admin (setelah F-14):** `sanitizeMediaUrl()` membatasi poster/banner/trailer ke `http(s)` absolut atau path internal ≤1000 karakter; `javascript:`/`data:`/`file:`/`//host` ditolak sebelum menyentuh DB, metadata, atau JSON-LD.
+- **Pipeline deploy (setelah F-15):** known_hosts ditulis dari secret `DEPLOY_HOST_KEY`/`STAGING_DEPLOY_HOST_KEY`, entri host diverifikasi (`ssh-keygen -F`), semua `ssh`/`scp` memakai `StrictHostKeyChecking=yes` + `UserKnownHostsFile` eksplisit, dan langkah "Siapkan SSH" gagal keras bila host key belum dipin.
+- **Peran database (setelah F-16):** dua role per environment — `anichin_app`/`anichin_staging_app` (DML saja, `NOSUPERUSER NOCREATEDB NOCREATEROLE`, tanpa `CREATE` di schema) untuk `web`, dan role owner (DDL) untuk `migrate`/`backup-cron`, dengan password berbeda; provisioning idempoten dijalankan entrypoint postgres (volume baru) maupun `compose-deploy.sh` (database lama).
+- **Panjang password (setelah F-17):** `PASSWORD_MAX_BYTES = 72` ditegakkan di register & reset-password (reguler + UI klien memakai penghitungan byte UTF-8), sehingga hash bcrypt tidak pernah diam-diam memotong password.
+- **DB & infra:** port DB/Redis/web hanya `127.0.0.1`; `POSTGRES_PASSWORD` (owner) & `POSTGRES_APP_PASSWORD` (aplikasi) wajib; container app berjalan sebagai `nextjs` (uid 1001, non-root); HEALTHCHECK; log container dibatasi (`max-size`/`max-file`); backup harian 02:00 retensi 14 hari (role owner, `pg_dump`).
 - **XSS/SQLi:** tidak ada `innerHTML`/`eval`; JSON-LD selalu lewat `sanitizeForJSONLD` + nonce; CSP nonce tanpa `unsafe-inline`/`unsafe-eval` di produksi; Prisma parameterized; input pencarian dibersihkan + pola injeksi dicatat ke audit log.
 
 ---
 
 ## 4. Rekomendasi lanjutan (urut prioritas)
 
-1. Least privilege DB (F-16) dan pisahkan role migrasi.
-2. Validasi URL media admin (F-14) dengan `sanitizeUrl()`.
-3. Verifikasi host key SSH di pipeline (F-15).
-4. Persist pending secret 2FA ke Redis (F-11) bila di-deploy multi-instance.
-5. Turunkan informasi pada `/api/health` (F-13) dan pertimbangkan anti-enumeration di register (F-12).
-6. Samakan batas panjang password dengan batas bcrypt 72 byte (F-17).
-7. Operasional sesi: pertimbangkan `SESSION_REVALIDATE_SECONDS=0` pada situs berisiko tinggi, dan pantau lonjakan query akibat validasi (1 lookup PK per request setelah jendela habis). Bila jumlah request ber-sesi tinggi, tambahkan cache in-process berkunci `id:sv` agar validasi tidak menembak DB setiap request.
+**Tidak ada temuan terbuka** — F-01…F-19 semuanya sudah diperbaiki di branch ini. Yang tersisa hanya pengerasan opsional di luar lingkup audit:
+
+1. **Operasional deploy:** aktifkan *Required reviewers* pada environment `production` (F-15 hanya bisa memastikan host key, bukan siapa yang boleh menekan tombol), dan pantau secret baru (`DEPLOY_HOST_KEY`, `POSTGRES_APP_PASSWORD`, `STAGING_*`).
+2. **Operasional sesi:** pertimbangkan `SESSION_REVALIDATE_SECONDS=0` pada situs berisiko tinggi; bila request ber-sesi sangat tinggi, tambahkan cache in-process berkunci `id:sv` supaya validasi tidak menembak DB setiap request.
+3. **Kontrol DB lanjutan:** role owner masih superuser bawaan image postgres (dibutuhkan `pg_dump`/restore). Bila ingin lebih ketat, turunkan menjadi non-superuser + `GRANT CREATE` eksplisit, lalu uji ulang `scripts/restore-db.sh`.
+4. **Hash password:** pertimbangkan `argon2id` (atau bcrypt cost 12) bila anggaran CPU memungkinkan; bcrypt cost 10 tetap wajar untuk saat ini.
+5. **Monitoring:** kirim `logs/audit.jsonl` (IP sudah di-HMAC) ke log terpusat dan pasang alert untuk pola `login gagal berulang`, `kode cadangan 2FA dipakai`, dan lonjakan 429.
 
 > Catatan migrasi: deploy **wajib** menjalankan `prisma migrate deploy` (service `migrate`
 > di `docker-compose.prod.yml`, atau `bun run db:migrate:prod`) sebelum versi baru menerima
-> traffic — kolom `User.sessionVersion` dibaca di jalur login.
+> traffic — kolom `User.sessionVersion` (F-06) dibaca di jalur login dan tabel
+> `TwoFactorBackupCode` (F-10) dibaca saat 2FA/login.
+> Catatan deploy F-16: `web` sekarang memakai role aplikasi. Pada server yang database-nya
+> sudah berjalan, `scripts/compose-deploy.sh` membuat role itu otomatis sebelum `up`;
+> pastikan secret `POSTGRES_APP_PASSWORD` (+`STAGING_POSTGRES_APP_PASSWORD`) sudah diisi
+> supaya compose tidak berhenti dengan "POSTGRES_APP_PASSWORD is required".
 
 ## 5. Cara verifikasi ulang
 
@@ -203,7 +264,7 @@ Prefix hilang karena `cookies` dikonfigurasi manual di `authOptions`. Sekarang `
 npm ci && npx prisma generate          # CI resmi
 npm audit --omit=dev                   # wajib 0 vulnerability (dipakai CI)
 npx tsc --noEmit && npx eslint .
-npx vitest run                         # 396 test, termasuk 101 regresi audit ini
+npx vitest run                         # 448 test, termasuk 153 regresi audit ini
 # uji manual cepat (dev):
 #   1. Tanpa SMTP + NODE_ENV=production → POST /api/auth/send-verification
 #      tidak boleh memuat devUrl, dan log tidak memuat ?token=
@@ -223,6 +284,23 @@ npx vitest run                         # 396 test, termasuk 101 regresi audit in
 #      kolom kode 2FA (harus berhasil), login lagi dengan kode yang sama (harus
 #      gagal); /auth/2fa harus menampilkan sisa kode berkurang; "Buat ulang kode
 #      cadangan" (butuh password) harus membatalkan kode lama
+#   8. Register (F-12): daftar dengan email yang sudah ada → status & body harus
+#      sama dengan pendaftaran email baru (201 { registered: true }); pemilik
+#      email menerima notifikasi (atau log non-produksi), pendaftar tidak
+#   9. /api/health (F-13): body tidak boleh memuat "version", "environment",
+#      atau nama environment; checks.memory hanya { status, rssMb }
+#  10. Media admin (F-14): POST /api/admin/anime dengan poster
+#      "javascript:alert(1)" → 400; banner/trailer tidak valid tersimpan null
+#  11. Pipeline (F-15): hapus secret DEPLOY_HOST_KEY → workflow harus GAGAL di
+#      langkah "Siapkan SSH" (bukan deploy diam-diam tanpa verifikasi); pastikan
+#      `grep -rn "StrictHostKeyChecking=no" .github/workflows` kosong
+#  12. Role DB (F-16): di server, `docker compose exec -T db psql -U anichin -d
+#      anichin -c "\du anichin_app"` → bukan superuser; lalu uji aplikasi tetap
+#      bisa tulis (`UPDATE`/`INSERT`) dan DDL ditolak:
+#      `psql -U anichin_app -c "DROP TABLE \"User\""` harus error izin
+#  13. Panjang password (F-17): register dengan 73 byte (mis. 72×"a"+"1") → 400
+#      "maksimal 72 byte"; 72 byte → 201; login akun lama berpassword panjang
+#      tetap bisa masuk
 ```
 
 > Catatan lingkungan: pada sandbox audit ini `prisma generate` tidak dapat mengunduh engine (hanya `registry.npmjs.org` yang diizinkan), sehingga suite `src/lib/auth.test.ts` tidak dapat dijalankan; seluruh suite lain lulus.

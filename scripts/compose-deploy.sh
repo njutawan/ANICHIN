@@ -32,6 +32,9 @@
 #   ROLLBACK_ON_FAILURE=0 matikan rollback otomatis            (1)
 #   ROLLBACK_ONLY=1       jangan deploy: kembalikan tag rollback terbaru lalu up
 #   ANICHIN_IMAGE / ANICHIN_MIGRATE_IMAGE  override nama image (dibaca juga dari .env)
+#
+# F-16: sebelum `up`, role aplikasi DB (DML saja) dipastikan ada — `web` tidak
+# lagi memakai role pemilik database (lihat scripts/postgres-init/10-app-role.sh).
 # ============================================================================
 
 set -eu
@@ -181,6 +184,28 @@ elif [ "$SKIP_PULL" = "1" ]; then
 else
   log "▶ Menarik image terbaru…"
   compose pull || fail "gagal menarik image (registry belum dikonfigurasi? set SKIP_PULL=1 bila server punya source repo)"
+fi
+
+# ── 2b. Role aplikasi DB (F-16) ────────────────────────────────────────────
+# `web` memakai role DML-only (POSTGRES_APP_USER/POSTGRES_APP_PASSWORD), bukan
+# role pemilik DB. Pada data dir yang masih kosong, entrypoint postgres di
+# container `db` yang membuatnya; pada database yang SUDAH ADA skrip initdb
+# tidak jalan lagi, jadi dijalankan di sini (idempoten) supaya upgrade tidak
+# pernah menghasilkan web yang tidak bisa konek ke database.
+if [ -n "$(env_value POSTGRES_APP_PASSWORD)" ] || [ -n "${POSTGRES_APP_PASSWORD:-}" ]; then
+  log "▶ Menyiapkan role aplikasi DB (hak DML saja)…"
+  compose up -d db || fail "gagal menyalakan container db"
+
+  i=1
+  while [ "$i" -le 30 ]; do
+    if compose exec -T db pg_isready -q >/dev/null 2>&1; then break; fi
+    [ "$i" = "30" ] && fail "database tidak siap setelah 30 percobaan — cek 'compose logs db'"
+    sleep 2
+    i=$((i + 1))
+  done
+
+  compose exec -T db sh /docker-entrypoint-initdb.d/10-app-role.sh \
+    || fail "gagal menyiapkan role aplikasi DB — periksa POSTGRES_APP_PASSWORD di .env dan izin role migrasi"
 fi
 
 # ── 3–5. Up, tunggu migrasi, tunggu health ─────────────────────────────────

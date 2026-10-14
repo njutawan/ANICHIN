@@ -268,6 +268,40 @@ async function deliverEmail(params: {
 }
 
 /**
+ * Beri tahu pemilik alamat bahwa seseorang (mungkin dia sendiri) mencoba
+ * mendaftar dengan email yang sudah terdaftar — audit F-12.
+ *
+ * Dipakai `POST /api/auth/register` supaya respons HTTP-nya bisa identik untuk
+ * email baru maupun email yang sudah ada: pendaftar tidak lagi mendapat sinyal
+ * "email ini terdaftar" dari status/body, tetapi pemilik email yang sah tetap
+ * mendapat informasi (dan bisa mereset password bila itu bukan dia).
+ *
+ * `loginUrl` BUKAN rahasia (tidak ada token), jadi aman dipakai sebagai
+ * `tokenUrl` di `deliverEmail` — di non-produksi URL-nya hanya tampil di log
+ * untuk QA.
+ */
+export async function sendAccountExistsEmail(
+  to: string,
+  loginUrl: string
+): Promise<SendEmailResult> {
+  return deliverEmail({
+    to,
+    tokenUrl: loginUrl,
+    subject: '[AniChin] Pendaftaran dengan email ini',
+    html: `
+      <div style="font-family:sans-serif;max-width:480px">
+        <h2>Email ini sudah terdaftar di AniChin</h2>
+        <p>Ada percobaan membuat akun baru memakai alamat email ini. Kalau itu kamu,
+           kamu tidak perlu mendaftar lagi — cukup masuk memakai password lama:</p>
+        <p><a href="${loginUrl}" style="display:inline-block;padding:10px 18px;background:#f59e0b;color:#111;border-radius:6px;text-decoration:none;font-weight:700">Masuk ke AniChin</a></p>
+        <p>Lupa password? Gunakan fitur &quot;Lupa password&quot; di halaman masuk.</p>
+        <p style="color:#666;font-size:12px">Kalau ini bukan kamu, abaikan email ini — tidak ada yang berubah pada akunmu.</p>
+      </div>`,
+    text: `Email ini sudah terdaftar di AniChin. Masuk di ${loginUrl} — atau pakai "Lupa password" bila lupa. Kalau bukan kamu, abaikan email ini.`,
+  });
+}
+
+/**
  * Kirim email verifikasi email (token 24 jam).
  */
 export async function sendVerificationEmail(
