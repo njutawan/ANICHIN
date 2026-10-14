@@ -92,10 +92,19 @@ export async function POST(req: NextRequest) {
     const hashedPassword = hashSync(password, 10);
 
     // 8. Update user password + mark token as used (transaction)
+    //
+    // `sessionVersion` dinaikkan bersamaan: semua JWT yang sudah terbit (termasuk
+    // milik penyerang yang mencuri cookie, atau sesi yang membuat reset ini
+    // karena akun diambil alih) langsung dicabut oleh `jwt` callback di
+    // src/lib/auth.ts. Sebelumnya reset password hanya mengganti hash — sesi
+    // lama tetap hidup sampai 7 hari.
     await db.$transaction([
       db.user.update({
         where: { id: resetRecord.userId },
-        data: { password: hashedPassword },
+        data: {
+          password: hashedPassword,
+          sessionVersion: { increment: 1 },
+        },
       }),
       db.passwordReset.update({
         where: { token },

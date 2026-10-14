@@ -144,6 +144,12 @@ sesi, reset password, upload). Ringkasnya: CSP berbasis nonce, security header d
 per-tier + lockout login, audit log ber-`IP_HASH_SALT`, dan validasi input
 terpusat (Zod).
 
+> **Pencabutan sesi:** JWT memuat `id`/`role` dan `sessionVersion` yang
+> dibandingkan dengan kolom `User.sessionVersion` di database (`SESSION_REVALIDATE_SECONDS`,
+> default 60 detik). Reset password, perubahan role oleh admin, dan penonaktifan
+> 2FA menaikkan nilai itu — semua sesi lama (termasuk cookie yang dicuri) berhenti
+> berlaku paling lama satu jendela validasi, bukan menunggu JWT kedaluwarsa.
+
 > **Catatan 2FA:** verifikasi kode TOTP hanya terjadi di
 > `src/lib/auth.ts` (`authorize()`), di dalam alur login yang sudah dilindungi
 > lockout. Endpoint `POST /api/auth/2fa/verify` sengaja **tidak** memverifikasi

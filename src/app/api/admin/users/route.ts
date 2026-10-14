@@ -137,9 +137,14 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
+    // Perubahan role HARUS mencabut sesi lama: JWT menyimpan `role`, dan jika
+    // tidak dinaikkan, admin yang baru diturunkan (atau sebaliknya) masih
+    // memakai hak lamanya sampai token kedaluwarsa (dulu sampai 7 hari).
+    // `sessionVersion` naik → token lama ditolak oleh `jwt` callback
+    // (src/lib/auth.ts) dan klien diminta login ulang.
     const updated = await db.user.update({
       where: { id: target.id },
-      data: { role },
+      data: { role, sessionVersion: { increment: 1 } },
       select: USER_SELECT,
     });
 

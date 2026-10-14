@@ -23,6 +23,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { signOut } from 'next-auth/react';
 
 type PageState =
   | 'loading'
@@ -155,6 +156,12 @@ export default function TwoFactorPage() {
       setPassword('');
       setState('disabled');
       toast.success('2FA dinonaktifkan');
+      // Server menaikkan `sessionVersion` saat 2FA dinonaktifkan (faktor kedua
+      // hilang → semua sesi dicabut), jadi token milik tab ini sudah tidak valid.
+      // Bersihkan cookie sesi lalu minta login ulang supaya pengguna tidak
+      // tertinggal di halaman dengan sesi mati.
+      await signOut({ redirect: false });
+      router.push('/auth/login?callbackUrl=/auth/2fa');
     } catch {
       toast.error('Gagal terhubung ke server');
     } finally {

@@ -1,16 +1,26 @@
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
+import { sanitizeDisplayName } from '@/lib/security';
+import { logger } from '@/lib/logger';
 import { NextRequest, NextResponse } from 'next/server';
 
 /**
  * Server-side auth helpers — typed session, route guards, role checks.
  * Use these in API routes instead of calling getServerSession directly.
  *
- * We define our own typed session interface (AppSession) because NextAuth v4's
- * default Session.user is loosely typed. The actual session object returned
- * by getServerSession IS correctly shaped at runtime (we set it in the
- * `session` callback of authOptions), but TypeScript doesn't know that
- * without module augmentation (which breaks module resolution in NextAuth v4).
+ * ── Kenapa memakai `getServerSession(authOptions)` (bukan decode JWT sendiri) ──
+ * Pencabutan sesi (audit F-06, `sessionVersion` di src/lib/auth.ts) HANYA bekerja
+ * kalau server memeriksa DB saat request. Decode JWT saja tidak bisa mencabut
+ * apa pun: salinan cookie yang dicuri tidak pernah "di-refresh", jadi token lama
+ * tetap sah sampai kedaluwarsa. Karena itu guard di sini menempuh jalur session
+ * NextAuth, yang menjalankan `jwt` callback kami → `sessionVersion` dibandingkan
+ * dengan DB (dibatasi `SESSION_REVALIDATE_SECONDS`, default 60 detik).
+ *
+ * Kontrak yang dikunci di sini:
+ *   - sesi tanpa `id`/`role` (artinya sudah dicabut karena password/role berubah
+ *     atau akun dihapus) → dianggap BELUM LOGIN (fail closed),
+ *   - error apa pun saat menyusun sesi (termasuk secret hilang di produksi) →
+ *     null, bukan sesi kosong yang lolos otorisasi.
  */
 
 export interface AppUser {
@@ -28,13 +38,36 @@ export interface AppSession {
 
 /**
  * Get the current session on the server (API routes, server components).
- * Returns a typed AppSession or null if not authenticated.
+ * Returns a typed AppSession or null if not authenticated / already revoked.
  */
 export async function getServerAuthSession(): Promise<AppSession | null> {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return null;
-  // Cast to our typed session — shape is guaranteed by the session callback in authOptions
-  return session as unknown as AppSession;
+  try {
+    const session = await getServerSession(authOptions);
+    const user = session?.user as Partial<AppUser> | undefined;
+
+    // Sesi yang sudah dicabut kehilangan `id`/`role` (lihat `jwt` callback di
+    // src/lib/auth.ts) — perlakukan sebagai belum login, jangan "user kosong".
+    if (!user?.id || !user.role) return null;
+
+    return {
+      user: {
+        id: user.id,
+        role: user.role,
+        name: sanitizeDisplayName(user.name ?? 'Anonim'),
+        email: user.email ?? '',
+        image: user.image ?? null,
+      },
+      expires: session!.expires,
+    };
+  } catch (err) {
+    // Fail closed: jangan pernah menganggap pengguna login ketika verifikasi
+    // sesi gagal (token rusak, secret hilang, DB tidak bisa diakses saat
+    // membentuk sesi).
+    logger.error('[session] gagal menyusun sesi:', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
 }
 
 /**

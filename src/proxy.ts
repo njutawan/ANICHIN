@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { getToken } from 'next-auth/jwt';
+import { tokenCookieParams } from '@/lib/auth-cookies';
 
 /**
  * Security Headers Middleware
@@ -111,9 +112,15 @@ export async function proxy(request: NextRequest) {
   // --- Admin route protection (auth + role check via JWT) ---
   // Middleware runs on Edge runtime — use getToken (JWT decode, no DB call)
   if (pathname.startsWith('/admin')) {
+    // `cookieName`/`secureCookie` dioper EKSPLISIT dari `@/lib/auth-cookies`.
+    // Tanpa ini `getToken()` menghitung namanya sendiri dari NEXTAUTH_URL
+    // (`__Secure-next-auth.session-token` di produksi) sementara authOptions
+    // menulis `next-auth.session-token` → token selalu tidak ditemukan dan
+    // /admin tidak pernah bisa dibuka (F-18 di docs/SECURITY-AUDIT.md).
     const token = await getToken({
       req: request,
       secret: process.env.NEXTAUTH_SECRET,
+      ...tokenCookieParams,
     });
 
     if (!token) {

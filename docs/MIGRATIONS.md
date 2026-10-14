@@ -9,10 +9,22 @@ AniChin memakai **Prisma Migrate** dengan PostgreSQL. Semua perubahan skema
 
 ```
 prisma/migrations/
-├── migration_lock.toml              # provider = "postgresql"
-└── 20261001000000_init/
-    └── migration.sql                # 15 tabel + 53 index + 14 foreign key
+├── migration_lock.toml                                    # provider = "postgresql"
+├── 20261001000000_init/
+│   └── migration.sql                                      # 15 tabel + 53 index + 14 FK
+├── 20261002000000_add_perf_indexes/
+│   └── migration.sql
+└── 20261015120000_add_session_version/
+    └── migration.sql                                      # User.sessionVersion (pencabutan sesi)
 ```
+
+> **Migrasi `add_session_version` WAJIB jalan sebelum kode baru melayani
+> request.** Kode membaca `User.sessionVersion` (kolom baru) di jalur login dan
+> validasi sesi; kalau kolomnya belum ada, semua login gagal dengan error Prisma.
+> `docker-compose.prod.yml` menjalankannya otomatis lewat service `migrate`
+> (`prisma migrate deploy`) sebelum `web` start. Untuk deployment Vercel/lainnya
+> yang tidak memakai compose, jalankan `bun run db:migrate:prod` sebagai bagian
+> dari deploy.
 
 > **Penting soal penamaan.** Prisma hanya membaca berkas yang namanya **tepat**
 > `migration.sql` di dalam folder bernama `<14 digit timestamp>_<nama>`

@@ -7,6 +7,14 @@ import { db } from '@/lib/db';
 import { compareSync, hashSync } from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import { sanitizeDisplayName } from '@/lib/security';
+import {
+  CALLBACK_URL_COOKIE_NAME,
+  CSRF_COOKIE_NAME,
+  PKCE_COOKIE_NAME,
+  SESSION_COOKIE_NAME,
+  USE_SECURE_COOKIES,
+  cookieOptions,
+} from '@/lib/auth-cookies';
 import { getClientIp } from '@/lib/ip';
 import {
   isLocked as storeIsLocked,
@@ -58,6 +66,29 @@ async function isAccountLocked(email: string, ip: string): Promise<boolean> {
 async function clearAttempts(email: string, ip: string): Promise<void> {
   const key = getAttemptKey(email, ip);
   await clearFails(key);
+}
+
+// --- Session revalidation window ---
+/**
+ * Jeda minimum antara dua validasi sesi ke DB (ms).
+ *
+ * JWT bersifat stateless: tanpa cek ke DB, token yang sudah dicabut (password
+ * direset / role diturunkan / akun dihapus) tetap berlaku sampai kedaluwarsa —
+ * dulu hingga 7 hari. Karena itu token disimpan bersama `sessionVersion` dan
+ * divalidasi ulang ke DB secara berkala; `SESSION_REVALIDATE_SECONDS`
+ * menentukan seberapa cepat pencabutan berlaku:
+ *
+ *   0    → validasi setiap request (paling ketat; 1 query per request ber-sesi)
+ *   60   → default: pencabutan berlaku ≤60 detik, ~1 query per menit per sesi
+ *   3600 → longgar (maksimum yang diterima)
+ *
+ * Nilai dibaca saat request (bukan saat modul dimuat) supaya bisa diatur
+ * per-deployment dan di-stub oleh test.
+ */
+function sessionRevalidateMs(): number {
+  const raw = Number(process.env.SESSION_REVALIDATE_SECONDS ?? '60');
+  if (!Number.isFinite(raw) || raw < 0) return 60_000;
+  return Math.min(raw, 3600) * 1000;
 }
 
 // --- Email validation (server-side, no external deps) ---
@@ -267,46 +298,32 @@ export const authOptions: NextAuthOptions = {
     error: '/auth/login',
     newUser: '/auth/register',
   },
+  /**
+   * Nama cookie TIDAK boleh ditulis manual di sini — semuanya dari
+   * `@/lib/auth-cookies` supaya sama persis dengan yang dicari `getToken()`
+   * di `src/proxy.ts` dan `src/lib/session.ts`. Sebelumnya nama tanpa prefix
+   * dipakai di produksi sementara `getToken()` mencari `__Secure-...` sehingga
+   * `/admin` selalu dianggap belum login (F-18 di docs/SECURITY-AUDIT.md).
+   */
   cookies: {
     sessionToken: {
-      name: `next-auth.session-token`,
-      options: {
-        httpOnly: true,
-        sameSite: 'lax',
-        path: '/',
-        secure: process.env.NODE_ENV === 'production',
-      },
+      name: SESSION_COOKIE_NAME,
+      options: cookieOptions(),
     },
     callbackUrl: {
-      name: `next-auth.callback-url`,
-      options: {
-        httpOnly: true,
-        sameSite: 'lax',
-        path: '/',
-        secure: process.env.NODE_ENV === 'production',
-      },
+      name: CALLBACK_URL_COOKIE_NAME,
+      options: cookieOptions(),
     },
     csrfToken: {
-      name: `next-auth.csrf-token`,
-      options: {
-        httpOnly: true,
-        sameSite: 'lax',
-        path: '/',
-        secure: process.env.NODE_ENV === 'production',
-      },
+      name: CSRF_COOKIE_NAME,
+      options: cookieOptions(),
     },
     pkceCodeVerifier: {
-      name: `next-auth.pkce.code-verifier`,
-      options: {
-        httpOnly: true,
-        sameSite: 'lax',
-        path: '/',
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: 60 * 15,
-      },
+      name: PKCE_COOKIE_NAME,
+      options: { ...cookieOptions(), maxAge: 60 * 15 },
     },
   },
-  useSecureCookies: process.env.NODE_ENV === 'production',
+  useSecureCookies: USE_SECURE_COOKIES,
   callbacks: {
     // Auto-create user on first OAuth sign-in (Google/GitHub)
     async signIn({ user, account }) {
@@ -344,32 +361,106 @@ export const authOptions: NextAuthOptions = {
         role?: 'user' | 'admin';
         name?: string | null;
         email?: string;
+        /** sessionVersion saat token ini diterbitkan / terakhir divalidasi. */
+        sv?: number;
+        /** Kapan terakhir divalidasi ke DB (epoch ms) — pembatas frekuensi query. */
+        svCheckedAt?: number;
       };
-      // Initial sign-in
+
+      // ── 1. Login pertama: identitas diambil dari DB (sumber kebenaran) ──
+      //
+      // Sebelumnya nilai diambil dari objek `user` yang diberikan provider. Untuk
+      // OAuth (tanpa adapter) objek itu adalah profil provider: `id`-nya id akun
+      // di Google/GitHub (bukan id baris `User` kita) dan `role` tidak ada —
+      // akibatnya user OAuth login tanpa `id`/`role` yang benar (komentar/ulasan
+      // gagal, dan sesi tidak bisa dicabut karena token tidak memuat penanda).
+      // Sekarang: cari user di DB berdasarkan email, lalu salin id/role/name +
+      // `sessionVersion` ke token. Kredensial tetap jalan (email sudah ada).
       if (user) {
-        const u = user as { id: string; role: 'user' | 'admin'; name?: string | null; email?: string };
-        t.id = u.id;
-        t.role = u.role;
-        t.name = u.name ?? t.name;
-        t.email = u.email ?? t.email;
-      }
-      // Refresh: re-fetch role from DB to catch role changes / revoked users
-      if (trigger === 'update' && t.id) {
-        try {
-          const fresh = await db.user.findUnique({
-            where: { id: t.id },
-            select: { role: true, name: true },
-          });
-          if (fresh) {
-            t.role = fresh.role as 'user' | 'admin';
-            t.name = fresh.name;
-          } else {
-            // User was deleted — invalidate token
-            t.id = undefined;
-            t.role = undefined;
+        const u = user as {
+          id?: string;
+          role?: 'user' | 'admin';
+          name?: string | null;
+          email?: string;
+        };
+        const email = u.email?.trim().toLowerCase();
+
+        let identity: {
+          id: string;
+          role: string;
+          name: string;
+          sessionVersion: number;
+        } | null = null;
+
+        if (email) {
+          try {
+            identity = await db.user.findUnique({
+              where: { email },
+              select: { id: true, role: true, name: true, sessionVersion: true },
+            });
+          } catch (err) {
+            // Jangan gagalkan login karena satu query gagal: token tetap dibuat
+            // dari data kredensial, dan `sv` sengaja dibiarkan undefined supaya
+            // validasi ulang berikutnya (yang mencari `sessionVersion` di DB)
+            // yang menentukan.
+            logger.error('[auth] gagal memuat identitas user saat login:', {
+              error: err instanceof Error ? err.message : String(err),
+            });
           }
-        } catch {
-          // DB error — keep existing token (fail open for read, not for write)
+        }
+
+        t.id = identity?.id ?? u.id;
+        t.role = (identity?.role as 'user' | 'admin' | undefined) ?? u.role;
+        t.name = identity?.name ?? u.name ?? t.name;
+        t.email = email ?? u.email ?? t.email;
+        t.sv = identity?.sessionVersion;
+        t.svCheckedAt = Date.now();
+        return token;
+      }
+
+      // ── 2. Request berikutnya: validasi berkala + pencabutan sesi ──
+      //
+      // `sessionVersion` dinaikkan saat password direset / role diubah admin,
+      // dan baris `User` hilang saat akun dihapus. Token dengan `sv` lama (atau
+      // yang usernya sudah tidak ada) dicabut di sini — bukan menunggu JWT
+      // kedaluwarsa (dulu sampai 7 hari).
+      if (t.id) {
+        const due =
+          trigger === 'update' || Date.now() - (t.svCheckedAt ?? 0) >= sessionRevalidateMs();
+
+        if (due) {
+          try {
+            const fresh = await db.user.findUnique({
+              where: { id: t.id },
+              select: { id: true, role: true, name: true, sessionVersion: true },
+            });
+
+            // `t.sv === undefined` = token yang diterbitkan sebelum fitur ini ada
+            // (atau saat DB sempat error) → adopsi nilai DB (trust on first use);
+            // token berikutnya selalu punya penanda.
+            const revoked = !fresh || (t.sv !== undefined && fresh.sessionVersion !== t.sv);
+
+            if (revoked) {
+              t.id = undefined;
+              t.role = undefined;
+              t.sv = undefined;
+              t.name = null;
+              t.email = undefined;
+            } else {
+              t.role = fresh.role as 'user' | 'admin';
+              t.name = fresh.name;
+              t.sv = fresh.sessionVersion;
+            }
+            t.svCheckedAt = Date.now();
+          } catch (err) {
+            // DB error: token DIPERTAHANKAN (fail open) — kalau tidak, gangguan
+            // DB sesaat akan menulis ulang cookie semua pengguna menjadi token
+            // kosong alias logout massal permanen. `svCheckedAt` juga tidak
+            // diperbarui, jadi request berikutnya mencoba validasi lagi.
+            logger.error('[auth] validasi ulang sesi gagal:', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
       }
       return token;
@@ -377,9 +468,20 @@ export const authOptions: NextAuthOptions = {
     async session({ session, token }) {
       const t = token as { id?: string; role?: 'user' | 'admin'; name?: string | null };
       const s = session as unknown as {
-        user: { id: string; name: string; email: string; image?: string | null; role: 'user' | 'admin' };
+        user?: { id: string; name: string; email: string; image?: string | null; role: 'user' | 'admin' };
       };
-      if (s.user && t.id && t.role) {
+      // Sesi dicabut (password/role berubah atau akun dihapus) → jangan laporkan
+      // user apa pun.
+      //
+      // Objek yang dikembalikan SENGAJA kosong setelah serialisasi (`{}`):
+      // SDK klien (`fetchData` di next-auth/client/_utils) mengembalikan `null`
+      // bila body JSON tidak punya kunci sama sekali, sehingga SessionProvider
+      // menandai status "unauthenticated" dan UI langsung menganggap logout —
+      // bukan "authenticated tapi usernya kosong".
+      if (!t.id || !t.role) {
+        return { user: undefined, expires: undefined } as unknown as typeof session;
+      }
+      if (s.user) {
         s.user.id = t.id;
         s.user.role = t.role;
         s.user.name = sanitizeDisplayName(s.user.name ?? t.name ?? 'Anonim');

@@ -23,25 +23,25 @@
 | 10 | Anti XSS | ✅ | Tidak ada `innerHTML`/`eval`/`new Function` di produksi; `dangerouslySetInnerHTML` hanya untuk JSON-LD yang di-escape + nonce; CSP nonce (`'strict-dynamic'`) di produksi. **F-04 (domain skrip asing) diperbaiki.** |
 | 11 | Server-side auth | ✅ | Semua route sensitif memakai `requireUser`/`requireAdmin` (bukan cek di klien); NextAuth JWT diverifikasi di server. **F-03 (oracle TOTP) diperbaiki.** |
 | 12 | Cek akses user | ✅ | IDOR diuji: DELETE komentar/ulasan hanya pemilik atau admin (403); data user lain tidak pernah dikembalikan (select minimal, tanpa `password`). |
-| 13 | Role admin aman | ✅ | `/admin` dijaga proxy (JWT role) + `requireAdmin` di setiap route `/api/admin/*` (5/5 file) + noindex; admin tidak bisa menurunkan dirinya sendiri; promosi/demosi tercatat di log. **F-05, F-06, F-07 dicatat.** |
+| 13 | Role admin aman | ✅ | `/admin` dijaga proxy (JWT role) + guard server-side di `admin/layout.tsx` + `requireAdmin` di setiap route `/api/admin/*` (5/5 file) + noindex; admin tidak bisa menurunkan dirinya sendiri; promosi/demosi mencabut sesi lama & tercatat di log. **F-18 diperbaiki; F-07 masih terbuka.** |
 | 14 | DB jangan public | ✅ | Compose mengikat `127.0.0.1:5432` / `127.0.0.1:6379` / `127.0.0.1:3000`; hanya Caddy yang publik; `POSTGRES_PASSWORD` wajib (`:?`); volume terpisah; WAL archiving (yang dulu bisa memenuhi disk) sengaja dihapus. |
 | 15 | DB permission ketat | ⚠️ | Kredensial kuat & port lokal sudah benar, tetapi aplikasi memakai role **pemilik DB** (bisa DDL). Lihat **F-16** (least privilege). |
 | 16 | Hash password | ✅ | bcrypt cost 10 di register, reset, dan user OAuth (password acak 32 byte). **F-08 (kunci 2FA salah format) diperbaiki.** |
-| 17 | Session aman | ⚠️ | Cookie `httpOnly` + `SameSite=Lax` + `Secure` (prod), JWT 7 hari / sesi 30 hari, secret produksi wajib (tanpa fallback). Lihat **F-09** (prefix cookie) & **F-06** (revokasi sesi). |
-| 18 | Reset password aman | ✅ | Token 32 byte CSPRNG, sekali pakai, kedaluwarsa 1 jam, semua token lain dibatalkan dalam transaksi, pesan generik anti-enumeration. **F-02 & template email diperbaiki.** |
+| 17 | Session aman | ✅ | Cookie `httpOnly` + `SameSite=Lax` + `Secure` + prefix `__Secure-`/`__Host-` (prod), JWT 7 hari / sesi 30 hari, secret produksi wajib (tanpa fallback), dan **pencabutan sesi** lewat `User.sessionVersion` (F-06) + nama cookie terpusat (F-09/F-18). |
+| 18 | Reset password aman | ✅ | Token 32 byte CSPRNG, sekali pakai, kedaluwarsa 1 jam, semua token lain dibatalkan dalam transaksi, pesan generik anti-enumeration, dan **semua sesi lama dicabut** (`sessionVersion`) saat password diganti. **F-02 & template email diperbaiki.** |
 | 19 | Batasi file upload | ➖ | **Tidak ada fitur upload** (tidak ada `formData()`/multipart/tulis file dari request). Yang ada hanya URL gambar eksternal dari admin (lihat F-14) dan optimizer `next/image` yang host-nya sudah di-allowlist. |
 
 **Hasil perintah verifikasi**
 
 ```
 npm audit --omit=dev   → 0 vulnerabilities (311 dependensi produksi)
-npx vitest run         → 309 test lulus (36 dari 37 file); 1 suite butuh `prisma generate`
+npx vitest run         → 336 test lulus (39 dari 40 file); 1 suite butuh `prisma generate`
                          (sandbox ini tidak bisa mengunduh engine Prisma; di CI normal)
 npx tsc --noEmit       → bersih
-npx eslint <file yang diubah> → bersih
+npx eslint .           → bersih
 ```
 
-**Perubahan kode pada audit ini:** 4 temuan Tinggi/Sedang diperbaiki + 1 temuan dokumentasi/konfigurasi, ditambah **14 test regresi** baru.
+**Perubahan kode pada audit ini:** **9 temuan diperbaiki** (F-01…F-06, F-08, F-09, F-18), **8 masih terbuka** (F-07, F-10…F-17), ditambah **41 test regresi** baru (14 pada audit awal, 27 pada lanjutan F-06/F-18).
 
 ---
 
@@ -83,17 +83,22 @@ npx eslint <file yang diubah> → bersih
 **Dampak:** jika staging dijalankan tanpa env, JWT/sesi ditandatangani dengan secret yang **tertulis di repo publik** → siapa pun bisa menempa token sesi (termasuk `role: admin`) dan masuk ke panel admin staging (yang sering memakai data produksi).
 **Perbaikan:** keempat variabel (`POSTGRES_PASSWORD`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, dan `DATABASE_URL` turunannya) memakai `${VAR:?…}` sehingga compose **gagal cepat** alih-alih memakai default. Pipeline staging sudah mengirim nilai dari GitHub Secrets, jadi tidak ada perubahan alur deploy.
 
-#### F-06 — [Sedang] Reset password / perubahan role tidak mencabut sesi yang sudah aktif
+#### Perbaikan lanjutan (setelah audit awal)
+
+#### F-06 — [Tinggi] Reset password / perubahan role tidak mencabut sesi yang sudah aktif ✅ DIPERBAIKI
 
 **Bukti:** strategi sesi adalah JWT stateless (`src/lib/auth.ts`); `jwt` callback hanya menyegarkan role dari DB ketika `trigger === 'update'`; tidak ada `sessionVersion`/`passwordChangedAt`. `reset-password` hanya mengubah `password`.
 **Dampak:** cookie sesi yang sudah dicuri (atau akun yang di-demote/dihapus) tetap berlaku sampai JWT kedaluwarsa — hingga **7 hari**. Korban yang mereset password karena akunnya diambil alih tidak memutus akses penyerang.
-**Rekomendasi (belum diubah):** tambahkan kolom `sessionVersion Int @default(0)` (atau `passwordChangedAt`) pada `User`, sertakan di klaim JWT saat login, dan tolak token yang versinya lebih tua pada `jwt`/`session` callback; naikkan `sessionVersion` di reset-password, ganti password, dan saat admin menurunkan role/menghapus user.
-
-#### F-07 — [Sedang] `allowDangerousEmailAccountLinking: true` pada Google & GitHub
-
-**Bukti:** `src/lib/auth.ts` (dua provider OAuth memakai flag ini), sementara `signIn` callback membuat/menautkan akun hanya berdasarkan `email` tanpa memeriksa `emailVerified` akun lokal.
-**Dampak:** flag ini secara eksplisit "dangerous" di NextAuth: akun OAuth dengan email sama otomatis ditautkan ke akun lokal. Jika provider mengembalikan email yang belum terverifikasi (atau klaim email bisa diatur), akun bisa dibajak tanpa password. Risiko bergantung pada provider; Google/GitHub pada umumnya memverifikasi email, tetapi ini melepas satu lapis pertahanan tanpa perlu.
-**Rekomendasi:** hapus flag ini (biarkan NextAuth menolak tautan otomatis), atau set hanya untuk provider yang benar-benar memverifikasi email dan tambahkan syarat `user.emailVerified` pada akun lokal.
+**Perbaikan (implementasi):**
+1. Kolom `User.sessionVersion Int @default(0)` + migrasi `prisma/migrations/20261015120000_add_session_version/` (lihat `docs/MIGRATIONS.md` — migrasi wajib jalan sebelum kode baru melayani request).
+2. `jwt` callback (`src/lib/auth.ts`): saat login, identitas (`id`/`role`/`name`) dan `sessionVersion` diambil **dari DB** (bukan dari objek provider — ini sekaligus memperbaiki login OAuth yang `id`-nya id akun Google/GitHub, bukan id baris `User`). Pada request berikutnya token divalidasi ulang ke DB: `sessionVersion` berbeda → klaim `id`/`role` dibersihkan; baris `User` hilang → idem. Validasi dibatasi `SESSION_REVALIDATE_SECONDS` (default 60 detik; `0` = setiap request).
+3. `session` callback: sesi yang sudah dicabut mengembalikan payload kosong → SDK klien (`fetchData`) membacanya sebagai `null`, jadi `useSession`/`useAuth` langsung menganggap pengguna logout.
+4. `sessionVersion` dinaikkan pada peristiwa yang mengubah jaminan identitas: **reset password** (`/api/auth/reset-password`), **perubahan role oleh admin** (`PATCH /api/admin/users`), dan **penonaktifan 2FA** (`/api/auth/2fa/disable` — faktor kedua hilang, semua sesi dicabut; halaman 2FA otomatis sign-out).
+5. Guard server-side (`src/lib/session.ts`) kini menempuh jalur session NextAuth (yang menjalankan `jwt` callback → cek DB), dan **fail closed**: sesi tanpa `id`/`role` = belum login. Decode JWT saja sengaja tidak dipakai — salinan cookie yang dicuri tidak pernah di-refresh, jadi tanpa cek DB pencabutan tidak akan berpengaruh.
+6. `/admin` dapat guard tambahan di `src/app/admin/layout.tsx` (`isAdmin()` → redirect) sehingga halaman admin juga tunduk pada pencabutan, bukan hanya API-nya.
+**Fail-open yang disengaja:** bila DB error saat validasi ulang, token dipertahankan (kalau tidak, gangguan DB sesaat = logout massal permanen karena cookie ditulis ulang tanpa klaim) dan jadwal validasi tidak dimajukan sehingga request berikutnya mencoba lagi.
+**Catatan:** token lama (diterbitkan sebelum fitur ini) tidak punya klaim `sv` → nilainya diadopsi dari DB pada validasi pertama (trust on first use), jadi tidak ada logout massal. Namun karena nama cookie ikut berubah ke `__Secure-…` (F-09/F-18), semua sesi lama memang logout satu kali saat deploy.
+**Regression test:** `src/lib/session-revocation.test.ts` (12), `src/lib/session.test.ts` (11), `src/lib/auth-cookies.test.ts` (4).
 
 #### F-08 — [Sedang] `TWO_FACTOR_ENCRYPTION_KEY` di-generate dengan format yang ditolak aplikasi
 
@@ -101,11 +106,22 @@ npx eslint <file yang diubah> → bersih
 **Dampak:** siapa pun yang mengikuti skrip/dokumentasi ini mendapat konfigurasi yang **lolos deploy** tetapi membuat `POST /api/auth/2fa/enable` selalu gagal 500 — 2FA (kontrol keamanan utama akun) tidak bisa diaktifkan, dan errornya baru muncul saat pengguna mencoba. Kegagalan ini fail-closed, tapi membuat fitur keamanan mati diam-diam.
 **Perbaikan:** semua tempat diganti menjadi `openssl rand -hex 32` (konsisten dengan `.env.example`), placeholder contoh di dokumentasi diganti nilai hex yang valid, dan `deploy.yml` kini memperingatkan bila secret yang dikirim bukan 64 hex.
 
+#### F-18 — [Tinggi] Nama cookie sesi tidak cocok → `/admin` selalu dianggap belum login di produksi ✅ DIPERBAIKI
+
+**Bukti:** `src/lib/auth.ts` menulis cookie bernama `next-auth.session-token` (tanpa prefix) walaupun `useSecureCookies: true`, karena `authOptions.cookies` menimpa default NextAuth. Sementara `getToken()` di `src/proxy.ts` (dan `next-auth/jwt`) menghitung sendiri nama yang dicarinya: `secureCookie ? '__Secure-next-auth.session-token' : …`, dengan `secureCookie` default = `NEXTAUTH_URL.startsWith('https://')` → **di produksi selalu `__Secure-…`**.
+**Dampak:** di produksi `getToken()` selalu `null` → middleware menganggap semua orang belum login → setiap akses `/admin` dialihkan ke login dengan `error=AccessDenied` walau sudah login sebagai admin: **panel admin tidak bisa dipakai dari UI**. (API `/api/admin/*` tetap jalan karena memakai jalur sesi NextAuth yang membaca `authOptions`.) Cacat ini juga membuat jenis pemeriksaan middleware apa pun (termasuk pencabutan sesi di Edge) tidak dapat dipercaya.
+**Perbaikan:** nama cookie dipusatkan di `src/lib/auth-cookies.ts` (prefix `__Secure-` untuk session/callback/pkce, `__Host-` untuk CSRF — sesuai default NextAuth, sekaligus menutup F-09), dipakai oleh `authOptions.cookies`, `src/proxy.ts` (dengan `cookieName` + `secureCookie` eksplisit) dan guard server-side. Karena nama cookie berubah, semua sesi lama logout satu kali saat deploy.
+**Regression test:** `src/lib/auth-cookies.test.ts` mengunci nama di produksi vs non-produksi **dan** memastikan `authOptions.cookies` identik dengan yang dipakai `getToken()`.
+
+#### F-09 — [Sedang–Rendah] Cookie sesi tanpa prefix `__Secure-`/`__Host-` ✅ DIPERBAIKI (bagian dari F-18)
+
+Prefix hilang karena `cookies` dikonfigurasi manual di `authOptions`. Sekarang `SESSION_COOKIE_NAME`/`CSRF_COOKIE_NAME` memakai prefix yang benar di produksi (`Secure` + `Path=/` terpenuhi sehingga `__Host-` valid). Uji manual yang disarankan: setelah deploy, pastikan cookie `__Secure-next-auth.session-token` ter-set dan `/admin` bisa dibuka oleh admin, lalu pastikan user biasa tetap ditolak.
+
 ### Dilaporkan (belum diubah — butuh keputusan/uji lanjutan)
 
 | ID | Sev | Temuan | Bukti | Rekomendasi |
 |---|:--:|---|---|---|
-| **F-09** | Sedang–Rendah | Cookie sesi tidak memakai prefix `__Secure-`/`__Host-`. Karena `cookies` dikonfigurasi manual (`src/lib/auth.ts`), NextAuth kehilangan prefix otomatisnya | `src/lib/auth.ts` (`name: 'next-auth.session-token'`), default NextAuth memakai `__Secure-`/`__Host-` | Ganti nama cookie ke `__Host-next-auth.session-token` **dan** panggil `getToken({ …, secureCookie: true })` di `src/proxy.ts`; uji akses `/admin` setelah perubahan (sesi lama akan logout) |
+| **F-07** | Sedang | `allowDangerousEmailAccountLinking: true` pada Google & GitHub — akun OAuth dengan email sama otomatis ditautkan ke akun lokal, tanpa syarat `emailVerified` | `src/lib/auth.ts` (dua provider) | Hapus flag ini (biarkan NextAuth menolak tautan otomatis), atau set hanya untuk provider yang memverifikasi email + syaratkan `user.emailVerified` akun lokal |
 | **F-10** | Rendah | *Backup code* 2FA ditampilkan sekali tetapi **tidak disimpan** (skema belum punya kolom) → tidak bisa dipakai login; pengguna yang kehilangan authenticator tidak punya jalur pemulihan | `src/lib/two-factor.ts` (`generateBackupCodes`), `src/app/api/auth/2fa/verify/route.ts`, `SECURITY.md` (klaim lama) | Tambah kolom hash backup code + konsumsi sekali pakai; `SECURITY.md` sudah dikoreksi pada audit ini |
 | **F-11** | Rendah | Pending secret 2FA disimpan di `Map` in-memory (TTL 5 menit) | `src/lib/two-factor.ts` | Multi-instance tanpa sticky session: pindahkan ke Redis (pola `rate-limit-store.ts`) |
 | **F-12** | Rendah | `POST /api/auth/register` membocorkan keberadaan email (`409 "Email sudah terdaftar."`), padahal `forgot-password` sengaja anti-enumeration | `src/app/api/auth/register/route.ts` | Bila ingin tertutup: balas 201/200 + kirim email "email sudah terdaftar" (butuh SMTP) |
@@ -124,6 +140,7 @@ npx eslint <file yang diubah> → bersih
 - **Otorisasi:** `src/lib/session.ts` (`requireUser`/`requireAdmin`) dipakai di semua route yang butuh; 5/5 file `src/app/api/admin/**` memanggil `requireAdmin`; proxy memblokir `/admin*` untuk non-admin pada Edge (JWT), `/admin` juga `noindex`; admin tidak bisa menurunkan role sendiri.
 - **Rate limit & audit:** tier `auth` 20 / `search` 30 / `read` 60 / `expensive` 10 per menit per IP, respons 429 + `Retry-After` + header `X-RateLimit-*`; audit log `logs/audit.jsonl` (rotasi 10 MB, dilewati di serverless) dengan IP di-HMAC-SHA256 memakai `IP_HASH_SALT`.
 - **2FA:** TOTP `otplib` (±1 langkah), secret terenkripsi AES-256-GCM (`iv:authTag:ciphertext`), `/enable` mewajibkan pending secret + kode valid, `/disable` mewajibkan password, dekripsi gagal → fail closed.
+- **Sesi (setelah F-06/F-09/F-18):** cookie `httpOnly` + `SameSite=Lax` + `Secure` + prefix `__Secure-`/`__Host-`; nama cookie terpusat di `src/lib/auth-cookies.ts` sehingga penulis (NextAuth) & pembaca (`getToken`) tidak bisa berbeda lagi; klaim JWT memuat `id`/`role`/`sv`; `User.sessionVersion` divalidasi ulang ke DB (default ≤60 detik, `SESSION_REVALIDATE_SECONDS`) dan dinaikkan saat reset password, perubahan role, dan penonaktifan 2FA; guard server-side (`src/lib/session.ts`) fail closed untuk sesi yang dicabut; `/admin` dijaga 3 lapis (proxy Edge → `admin/layout.tsx` yang DB-validated → `requireAdmin()` di tiap API).
 - **DB & infra:** port DB/Redis/web hanya `127.0.0.1`; `POSTGRES_PASSWORD` wajib; container app berjalan sebagai `nextjs` (uid 1001, non-root); HEALTHCHECK; log container dibatasi (`max-size`/`max-file`); backup harian 02:00 retensi 14 hari.
 - **XSS/SQLi:** tidak ada `innerHTML`/`eval`; JSON-LD selalu lewat `sanitizeForJSONLD` + nonce; CSP nonce tanpa `unsafe-inline`/`unsafe-eval` di produksi; Prisma parameterized; input pencarian dibersihkan + pola injeksi dicatat ke audit log.
 
@@ -131,15 +148,19 @@ npx eslint <file yang diubah> → bersih
 
 ## 4. Rekomendasi lanjutan (urut prioritas)
 
-1. **Revokasi sesi (F-06)** — satu-satunya temuan yang masih membiarkan akses penyerang bertahan setelah korban mengganti password.
-2. Hapus `allowDangerousEmailAccountLinking` (F-07) atau kunci ke `emailVerified` lokal.
-3. Prefix cookie `__Host-` + `secureCookie` di proxy (F-09) — sertakan uji manual `/admin` sesudahnya.
-4. Simpan *backup code* 2FA (F-10) supaya pengguna punya jalur pemulihan.
-5. Least privilege DB (F-16) dan pisahkan role migrasi.
-6. Validasi URL media admin (F-14) dengan `sanitizeUrl()`.
-7. Verifikasi host key SSH di pipeline (F-15).
-8. Persist pending secret 2FA ke Redis (F-11) bila di-deploy multi-instance.
-9. Turunkan informasi pada `/api/health` (F-13) dan pertimbangkan anti-enumeration di register (F-12).
+1. Hapus `allowDangerousEmailAccountLinking` (F-07) atau kunci ke `emailVerified` lokal.
+2. Simpan *backup code* 2FA (F-10) supaya pengguna punya jalur pemulihan.
+3. Least privilege DB (F-16) dan pisahkan role migrasi.
+4. Validasi URL media admin (F-14) dengan `sanitizeUrl()`.
+5. Verifikasi host key SSH di pipeline (F-15).
+6. Persist pending secret 2FA ke Redis (F-11) bila di-deploy multi-instance.
+7. Turunkan informasi pada `/api/health` (F-13) dan pertimbangkan anti-enumeration di register (F-12).
+8. Samakan batas panjang password dengan batas bcrypt 72 byte (F-17).
+9. Operasional sesi: pertimbangkan `SESSION_REVALIDATE_SECONDS=0` pada situs berisiko tinggi, dan pantau lonjakan query akibat validasi (1 lookup PK per request setelah jendela habis). Bila jumlah request ber-sesi tinggi, tambahkan cache in-process berkunci `id:sv` agar validasi tidak menembak DB setiap request.
+
+> Catatan migrasi: deploy **wajib** menjalankan `prisma migrate deploy` (service `migrate`
+> di `docker-compose.prod.yml`, atau `bun run db:migrate:prod`) sebelum versi baru menerima
+> traffic — kolom `User.sessionVersion` dibaca di jalur login.
 
 ## 5. Cara verifikasi ulang
 
@@ -147,13 +168,18 @@ npx eslint <file yang diubah> → bersih
 npm ci && npx prisma generate          # CI resmi
 npm audit --omit=dev                   # wajib 0 vulnerability (dipakai CI)
 npx tsc --noEmit && npx eslint .
-npx vitest run                         # 309+ test, termasuk 14 regresi audit ini
+npx vitest run                         # 336 test, termasuk 41 regresi audit ini
 # uji manual cepat (dev):
 #   1. Tanpa SMTP + NODE_ENV=production → POST /api/auth/send-verification
 #      tidak boleh memuat devUrl, dan log tidak memuat ?token=
 #   2. POST /api/auth/2fa/verify {email, token} → jawabannya hanya
 #      { requiresTwoFactor }; tidak ada verifikasi kode
 #   3. curl -s https://<domain>/api/health | jq  → error DB hanya DB_UNAVAILABLE
+#   4. Pencabutan sesi: login (cookie A) → di DB naikkan sessionVersion user
+#      (UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1) → request
+#      berikutnya dengan cookie A harus 401 & /api/auth/session kosong
+#   5. Nama cookie: di produksi harus `__Secure-next-auth.session-token`
+#      (bukan tanpa prefix) dan /admin harus bisa dibuka oleh admin
 ```
 
-> Catatan lingkungan: pada sandbox audit ini `prisma generate` tidak dapat mengunduh engine (hanya `registry.npmjs.org` yang diizinkan), sehingga suite `src/lib/auth.test.ts` tidak dapat dijalankan; seluruh 36 suite lain (309 test) lulus.
+> Catatan lingkungan: pada sandbox audit ini `prisma generate` tidak dapat mengunduh engine (hanya `registry.npmjs.org` yang diizinkan), sehingga suite `src/lib/auth.test.ts` tidak dapat dijalankan; seluruh suite lain lulus.

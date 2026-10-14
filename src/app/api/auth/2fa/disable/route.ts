@@ -92,12 +92,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Disable 2FA — clear secret + flag
+    // Disable 2FA — clear secret + flag.
+    //
+    // `sessionVersion` dinaikkan: 2FA adalah faktor kedua pada login, jadi
+    // menonaktifkannya menurunkan tingkat jaminan seluruh sesi yang ada. Sesi
+    // lain (mis. cookie yang dicuri lalu dipakai menonaktifkan 2FA) langsung
+    // dicabut dan harus login ulang — sesi yang sedang dipakai untuk aksi ini
+    // juga ikut logout, jadi klien harus mengarahkan pengguna ke halaman login.
     await db.user.update({
       where: { id: userId },
       data: {
         twoFactorSecret: null,
         twoFactorEnabled: false,
+        sessionVersion: { increment: 1 },
       },
     });
 
