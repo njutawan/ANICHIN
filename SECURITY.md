@@ -150,6 +150,15 @@ terpusat (Zod).
 > 2FA menaikkan nilai itu — semua sesi lama (termasuk cookie yang dicuri) berhenti
 > berlaku paling lama satu jendela validasi, bukan menunggu JWT kedaluwarsa.
 
+> **Penautan akun OAuth:** login Google/GitHub hanya diterima bila provider
+> benar-benar memverifikasi email akun itu (Google: klaim `email_verified`;
+> GitHub: dicek ke `GET /user/emails`, `verified: true`). Flag
+> `allowDangerousEmailAccountLinking` **tidak** dipakai — penautan email ke akun
+> lokal diatur callback `signIn` sendiri, dan akun lokal yang mengaktifkan 2FA
+> **tidak bisa** masuk lewat OAuth (wajib email + password + kode TOTP, supaya
+> OAuth tidak menjadi jalan pintas melewati 2FA). Email yang belum terverifikasi
+> di provider ditolak, bukan ditautkan.
+
 > **Catatan 2FA:** verifikasi kode TOTP hanya terjadi di
 > `src/lib/auth.ts` (`authorize()`), di dalam alur login yang sudah dilindungi
 > lockout. Endpoint `POST /api/auth/2fa/verify` sengaja **tidak** memverifikasi

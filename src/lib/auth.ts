@@ -91,6 +91,95 @@ function sessionRevalidateMs(): number {
   return Math.min(raw, 3600) * 1000;
 }
 
+// --- OAuth account-linking policy (audit F-07 / F-19) ---
+/**
+ * Jalur OAuth (Google/GitHub) menautkan akun **berdasarkan email**, jadi aturan
+ * di bawah ini adalah kontrol keamanannya:
+ *
+ * 1. **Email harus terverifikasi di provider.** Google mengirim klaim
+ *    `email_verified`; GitHub tidak, jadi statusnya kami periksa sendiri lewat
+ *    `GET /user/emails` memakai access token sesi OAuth itu (fail closed bila
+ *    pemeriksaan gagal). Tanpa langkah ini, siapa pun yang bisa membuat klaim
+ *    email di provider dapat masuk ke akun lokal dengan email tersebut.
+ * 2. **Akun lokal yang punya 2FA tidak boleh masuk lewat OAuth.** Alur OAuth
+ *    tidak melewati form kode TOTP milik `authorize()`, jadi membiarkannya
+ *    berarti 2FA bisa dilewati hanya dengan menekan tombol Google/GitHub.
+ *    Akun seperti itu diminta login dengan password + kode.
+ * 3. Flag `allowDangerousEmailAccountLinking` **sengaja tidak dipasang**: tanpa
+ *    adapter, NextAuth mengembalikan objek profil sebelum membaca flag itu
+ *    (`core/lib/callback-handler.js`: `if (!adapter) return { user: profile }`),
+ *    sehingga penautan nyatanya dilakukan callback `signIn` di bawah. Kalau
+ *    kelak dipasang adapter, flag itu WAJIB tetap false — kalau tidak, NextAuth
+ *    akan menautkan akun OAuth ke akun lokal hanya berdasar kesamaan email.
+ */
+const OAUTH_REDIRECT = {
+  /** Provider tidak (atau belum) memverifikasi email tersebut. */
+  emailNotVerified: '/auth/login?error=OAuthEmailNotVerified',
+  /** Akun lokal memakai 2FA → wajib login dengan password + kode TOTP. */
+  usePasswordLogin: '/auth/login?error=UsePasswordLogin',
+} as const;
+
+interface OAuthAccountLike {
+  provider?: string;
+  type?: string;
+  access_token?: string;
+}
+
+/**
+ * Apakah provider benar-benar memverifikasi `email`?
+ *
+ * - `google`: pakai klaim `email_verified` dari userinfo.
+ * - `github`: NextAuth v4 hanya mengambil email primary dari `/user/emails`
+ *   tanpa status `verified`, jadi kita periksa sendiri dengan token OAuth ini.
+ *   Error jaringan/HTTP → `false` (fail closed) karena hasilnya menentukan
+ *   apakah sebuah akun boleh ditautkan.
+ * - Provider lain: `false` (jangan pernah menautkan tanpa bukti verifikasi).
+ */
+async function isProviderEmailVerified(
+  account: OAuthAccountLike,
+  profile: unknown,
+  email: string
+): Promise<boolean> {
+  if (account.provider === 'google') {
+    const claim = (profile as { email_verified?: unknown } | null)?.email_verified;
+    return claim === true || claim === 'true';
+  }
+
+  if (account.provider === 'github') {
+    const token = account.access_token;
+    if (!token) return false;
+    try {
+      const res = await fetch('https://api.github.com/user/emails', {
+        headers: {
+          Authorization: `token ${token}`,
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'anichin-oauth-verify',
+        },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) return false;
+      const list: unknown = await res.json();
+      if (!Array.isArray(list)) return false;
+      return list.some((entry) => {
+        const item = entry as { email?: unknown; verified?: unknown };
+        return (
+          typeof item?.email === 'string' &&
+          item.email.toLowerCase() === email &&
+          item.verified === true
+        );
+      });
+    } catch (err) {
+      logger.error('[auth] gagal memverifikasi email GitHub:', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
+  return false;
+}
+
 // --- Email validation (server-side, no external deps) ---
 const EMAIL_RE = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 function isValidEmail(email: string): boolean {
@@ -261,7 +350,9 @@ function buildProviders() {
       GoogleProvider({
         clientId: process.env.GOOGLE_CLIENT_ID,
         clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-        allowDangerousEmailAccountLinking: true,
+        // TIDAK memakai `allowDangerousEmailAccountLinking` — lihat blok
+        // "OAuth account-linking policy" di atas: penautan dilakukan callback
+        // `signIn` yang mensyaratkan email terverifikasi di provider.
       })
     );
   }
@@ -272,7 +363,8 @@ function buildProviders() {
       GitHubProvider({
         clientId: process.env.GITHUB_CLIENT_ID,
         clientSecret: process.env.GITHUB_CLIENT_SECRET,
-        allowDangerousEmailAccountLinking: true,
+        // Idem: tanpa flag penautan "dangerous"; verifikasi email GitHub
+        // diperiksa sendiri di isProviderEmailVerified().
       })
     );
   }
@@ -325,35 +417,91 @@ export const authOptions: NextAuthOptions = {
   },
   useSecureCookies: USE_SECURE_COOKIES,
   callbacks: {
-    // Auto-create user on first OAuth sign-in (Google/GitHub)
-    async signIn({ user, account }) {
-      // Only handle OAuth providers (account.provider !== 'credentials')
-      if (account?.provider && account.provider !== 'credentials' && user.email) {
-        try {
-          const existing = await db.user.findUnique({
-            where: { email: user.email.toLowerCase() },
-            select: { id: true },
-          });
+    /**
+     * Kebijakan penautan/pembuatan akun lewat OAuth (Google/GitHub).
+     *
+     * Mengembalikan `true` untuk melanjutkan, atau URL (string) untuk menolak
+     * dengan kode error yang bisa ditampilkan halaman login — NextAuth
+     * mengalihkan ke URL itu (lihat `core/routes/callback.js`).
+     */
+    async signIn({ user, account, profile }) {
+      const oauthAccount = (account ?? {}) as OAuthAccountLike;
 
-          if (!existing) {
-            // Create new user from OAuth profile
-            await db.user.create({
-              data: {
-                email: user.email.toLowerCase(),
-                name: sanitizeDisplayName(user.name ?? user.email.split('@')[0]),
-                avatar: user.image ?? null,
-                password: hashSync(randomBytes(32).toString('hex'), 10), // random unused password
-                role: 'user',
-                emailVerified: new Date(), // OAuth emails are already verified
-              },
+      // Kredensial (email + password) tidak melewati kebijakan penautan ini —
+      // password sudah diverifikasi di `authorize()`. Selain kredensial,
+      // SEMUA jalur diperlakukan sebagai OAuth (fail closed): provider OIDC
+      // yang ditambahkan kelak tidak otomatis lolos hanya karena `type`-nya
+      // bukan "oauth", dan provider asing langsung ditolak oleh
+      // isProviderEmailVerified() di bawah.
+      if (!oauthAccount.provider || oauthAccount.provider === 'credentials' || oauthAccount.type === 'credentials') {
+        return true;
+      }
+
+      const email = (user?.email ?? '').trim().toLowerCase();
+      if (!email) {
+        logger.warn('[auth] OAuth ditolak: provider tidak mengirim email', {
+          provider: oauthAccount.provider,
+        });
+        return OAUTH_REDIRECT.emailNotVerified;
+      }
+
+      // 1. Email harus terverifikasi di provider (lihat catatan OAUTH_REDIRECT).
+      if (!(await isProviderEmailVerified(oauthAccount, profile, email))) {
+        logger.warn('[auth] OAuth ditolak: email belum terverifikasi di provider', {
+          provider: oauthAccount.provider,
+        });
+        return OAUTH_REDIRECT.emailNotVerified;
+      }
+
+      try {
+        const existing = await db.user.findUnique({
+          where: { email },
+          select: { id: true, twoFactorEnabled: true, emailVerified: true },
+        });
+
+        if (existing) {
+          // 2. 2FA tidak boleh dilewati lewat OAuth.
+          if (existing.twoFactorEnabled) {
+            logger.warn('[auth] OAuth ditolak: akun memakai 2FA', { provider: oauthAccount.provider });
+            return OAUTH_REDIRECT.usePasswordLogin;
+          }
+
+          // Provider sudah membuktikan kepemilikan email → aman untuk menandai
+          // akun lokal (dibuat lewat password, belum verifikasi) sebagai verified.
+          if (!existing.emailVerified) {
+            await db.user.update({
+              where: { id: existing.id },
+              data: { emailVerified: new Date() },
             });
           }
-        } catch (err) {
-          logger.error('[auth] OAuth user creation failed:', { error: err instanceof Error ? err.message : String(err) });
-          // Allow sign-in anyway if user exists (race condition)
+          return true;
         }
+
+        // 3. Akun baru — hanya dibuat karena provider memverifikasi email itu.
+        await db.user.create({
+          data: {
+            email,
+            name: sanitizeDisplayName(user.name ?? email.split('@')[0]),
+            avatar: user.image ?? null,
+            password: hashSync(randomBytes(32).toString('hex'), 10), // password acak (tak dipakai)
+            role: 'user',
+            emailVerified: new Date(), // diverifikasi provider pada langkah 1
+          },
+        });
+        return true;
+      } catch (err) {
+        // Balapan dua login OAuth bersamaan: baris sudah dibuat proses lain →
+        // aman untuk melanjutkan (jwt callback memuat identitas dari DB).
+        if (err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'P2002') {
+          return true;
+        }
+        // Error lain (DB bermasalah) → tolak: fail closed. Token tanpa identitas
+        // tidak berguna, dan tidak ada akun yang dibuat setengah jalan.
+        logger.error('[auth] OAuth sign-in gagal:', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return false;
       }
-      return true;
     },
     async jwt({ token, user, trigger }) {
       const t = token as {

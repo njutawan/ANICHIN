@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -21,6 +21,37 @@ export default function LoginPage() {
   const [step, setStep] = useState<LoginStep>('credentials');
   const [showPassword, setShowPassword] = useState(false);
   const [emailError, setEmailError] = useState('');
+
+  /**
+   * Pesan penolakan dari jalur OAuth (NextAuth mengalihkan ke
+   * /auth/login?error=<kode>). Kode seperti OAuthEmailNotVerified /
+   * UsePasswordLogin berasal dari callback `signIn` (kebijakan penautan akun,
+   * audit F-07/F-19) — tanpa ini pengguna hanya melihat halaman login tanpa
+   * penjelasan kenapa tombol Google/GitHub tidak bekerja.
+   *
+   * Dibaca dari `window.location` (bukan useSearchParams) supaya halaman tidak
+   * butuh Suspense boundary saat di-prerender.
+   */
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('error');
+    if (!code) return;
+
+    const messages: Record<string, string> = {
+      OAuthEmailNotVerified:
+        'Google/GitHub belum memverifikasi email akun itu. Masuk pakai email + password, atau pakai akun dengan email yang sudah diverifikasi.',
+      UsePasswordLogin:
+        'Akun ini memakai 2FA. Masuk pakai email + password + kode autentikator (login Google/GitHub tidak melewati 2FA).',
+      AccessDenied: 'Akses ditolak untuk akun itu.',
+      OAuthAccountNotLinked: 'Email itu sudah terdaftar. Masuk dulu dengan cara sebelumnya.',
+      Configuration: 'Konfigurasi login di server belum lengkap.',
+    };
+    const message = messages[code];
+    if (message) toast.error(message);
+
+    // Buang parameter error dari URL supaya refresh tidak memunculkan ulang.
+    window.history.replaceState({}, '', window.location.pathname);
+  }, []);
 
   // Inline email validation
   const validateEmail = (val: string) => {
