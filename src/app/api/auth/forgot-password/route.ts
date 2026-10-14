@@ -63,22 +63,31 @@ export async function POST(req: NextRequest) {
       const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
       const resetUrl = `${baseUrl}/auth/reset-password?token=${token}`;
 
-      // Send email (or log in dev)
+      // Send email (or, in non-produksi tanpa SMTP, log URL-nya untuk QA)
       const hasSmtp = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
 
       if (hasSmtp) {
         try {
-          // Send reset email via SMTP (reuse email.ts sendVerificationEmail pattern)
-          const { sendVerificationEmail } = await import('@/lib/email');
-          await sendVerificationEmail(normalizedEmail, resetUrl);
+          // Template khusus reset password (bukan template verifikasi email).
+          const { sendPasswordResetEmail } = await import('@/lib/email');
+          await sendPasswordResetEmail(normalizedEmail, resetUrl);
           logger.info('[forgot-password] Reset email sent', { userId: user.id });
         } catch (err) {
           logger.error('[forgot-password] Email send failed', {
             error: err instanceof Error ? err.message : String(err)
           });
         }
+      } else if (process.env.NODE_ENV !== 'production') {
+        // DEV ONLY: URL berisi token reset, jadi tidak boleh masuk log produksi.
+        // Sebelumnya baris ini berjalan tanpa guard NODE_ENV: di produksi yang
+        // belum dikonfigurasi SMTP, token reset password ALL user yang meminta
+        // reset tertulis ke stdout/Docker logs (CWE-532 — secret di log).
+        logger.info('[forgot-password] Reset URL (dev, no SMTP)', { resetUrl });
       } else {
-        logger.info('[forgot-password] Reset URL (no SMTP)', { resetUrl });
+        logger.warn(
+          '[forgot-password] SMTP belum dikonfigurasi — email reset tidak terkirim (produksi)',
+          { module: 'api/auth/forgot-password' }
+        );
       }
     }
 

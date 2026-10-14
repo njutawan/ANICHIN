@@ -99,11 +99,11 @@ echo "Generating secure random secrets..."
 echo ""
 
 NEXTAUTH_SECRET=$(openssl rand -base64 32)
-TWO_FACTOR_KEY=$(openssl rand -base64 32)
+TWO_FACTOR_KEY=$(openssl rand -hex 32)  # wajib 64 hex char (AES-256-GCM, lihat src/lib/two-factor.ts)
 POSTGRES_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)
 
 echo -e "${CHECK} NEXTAUTH_SECRET (44 chars): ${NEXTAUTH_SECRET:0:8}****"
-echo -e "${CHECK} TWO_FACTOR_ENCRYPTION_KEY (44 chars): ${TWO_FACTOR_KEY:0:8}****"
+echo -e "${CHECK} TWO_FACTOR_ENCRYPTION_KEY (64 hex chars): ${TWO_FACTOR_KEY:0:8}****"
 echo -e "${CHECK} POSTGRES_PASSWORD (32 chars): ${POSTGRES_PASSWORD:0:8}****"
 
 # Save to backup file for reference

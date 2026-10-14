@@ -183,9 +183,18 @@ function buildProviders() {
         }
 
         // --- 2FA check (if enabled) ---
+        //
+        // Verifikasi TOTP dilakukan DI SINI — satu-satunya tempat, dan selalu
+        // di dalam alur yang sudah melewati lockout (`isAccountLocked` di atas)
+        // serta mencatat kegagalan (sehingga brute-force kode 6 digit dibatasi
+        // 5 percobaan / 15 menit per email+IP). Endpoint /api/auth/2fa/verify
+        // sengaja TIDAK memverifikasi kode (dulu ia melakukannya, sehingga
+        // penyerang bisa memvalidasi kode di luar lockout). Halaman login
+        // memakai endpoint itu hanya untuk tahu kapan harus menampilkan input
+        // kode 2FA.
         if (user.twoFactorEnabled && user.twoFactorSecret) {
           if (!totp || totp.length !== 6) {
-            // Signal to client that 2FA is required (via custom error)
+            // Sinyal ke klien: bukan salah password, tetapi butuh langkah 2FA.
             throw new Error('2FA_REQUIRED');
           }
           try {

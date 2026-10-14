@@ -233,6 +233,12 @@ jobs:
           fi
           if [ -z "$TWO_FACTOR_ENCRYPTION_KEY" ]; then
             echo "::warning title=2FA tidak dikonfigurasi::TWO_FACTOR_ENCRYPTION_KEY kosong — pengguna yang mengaktifkan 2FA akan gagal (src/lib/two-factor.ts menolak tanpa kunci ini di produksi)."
+          elif ! printf '%s' "$TWO_FACTOR_ENCRYPTION_KEY" | grep -qE '^[0-9a-fA-F]{64}$'; then
+            # Validator runtime hanya menerima 64 hex char. Kunci base64 (44 char,
+            # hasil `openssl rand -base64 32`) LOLOS deploy tapi membuat
+            # /api/auth/2fa/enable gagal 500 — 2FA praktis tidak bisa diaktifkan
+            # dan errornya baru terlihat saat pengguna mencoba. Peringatkan di sini.
+            echo "::warning title=Format TWO_FACTOR_ENCRYPTION_KEY salah::Nilai ini bukan 64 hex char — 2FA akan gagal aktif (src/lib/two-factor.ts). Generate ulang: openssl rand -hex 32"
           fi
           if [ -z "$SMTP_HOST" ]; then
             echo "::notice title=SMTP belum diset::SMTP_HOST kosong — verifikasi email & reset password tidak akan mengirim email."

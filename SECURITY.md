@@ -136,10 +136,22 @@ Aktivitas di atas **tidak** memberi izin untuk menguji instance produksi
 
 Supaya laporan tidak tumpang tindih dengan hal yang sudah disengaja, ringkasan
 kontrol yang sudah terpasang ada di tabel **"Yang sudah bagus"** pada
-[`docs/CODE-REVIEW.md`](./docs/CODE-REVIEW.md) — antara lain: CSP berbasis nonce,
-11 security header di `src/proxy.ts`, 2FA TOTP + backup code terenkripsi
-AES-256-GCM, rate limiting 3 tingkat + lockout login, audit log ber-`IP_HASH_SALT`,
-`bun audit --production` yang memblokir CI, serta validasi input terpusat (Zod).
+[`docs/CODE-REVIEW.md`](./docs/CODE-REVIEW.md) dan di
+[`docs/SECURITY-AUDIT.md`](./docs/SECURITY-AUDIT.md) (audit 19 titik: secret,
+env, error, validasi, XSS/SQLi, auth server-side, role admin, DB, hash password,
+sesi, reset password, upload). Ringkasnya: CSP berbasis nonce, security header di
+`src/proxy.ts`, 2FA TOTP dengan secret terenkripsi AES-256-GCM, rate limiting
+per-tier + lockout login, audit log ber-`IP_HASH_SALT`, dan validasi input
+terpusat (Zod).
+
+> **Catatan 2FA:** verifikasi kode TOTP hanya terjadi di
+> `src/lib/auth.ts` (`authorize()`), di dalam alur login yang sudah dilindungi
+> lockout. Endpoint `POST /api/auth/2fa/verify` sengaja **tidak** memverifikasi
+> kode — ia hanya melaporkan apakah akun memerlukan langkah 2FA (dipakai form
+> login). *Backup code* saat ini **belum** bisa dipakai untuk login: kodenya
+> ditampilkan sekali saat aktivasi, tetapi skema database belum menyimpannya
+> (belum ada kolomnya) sehingga hanya TOTP yang diverifikasi — jangan
+> mengandalkannya sebagai jalur pemulihan.
 
 ## Menjaga kerahasiaan
 

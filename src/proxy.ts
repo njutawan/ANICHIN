@@ -21,7 +21,19 @@ import { getToken } from 'next-auth/jwt';
 
 // Trusted domains for scripts, styles, images, and connections
 const SELF = "'self'";
-const TRUSTED_SCRIPT_DOMAINS = ['https://chunk-server.com'];
+/**
+ * Domain skrip pihak ketiga yang benar-benar dipakai aplikasi.
+ *
+ * Sebelumnya berisi `https://chunk-server.com` — domain yang TIDAK direferensikan
+ * oleh satu pun file di repo ini, tidak ada di package.json, dan bukan CDN mana
+ * pun yang dipakai aplikasi. Membiarkan allowlist `script-src` menunjuk domain
+ * asing berarti: (a) siapa pun yang menguasai domain itu bisa memuat skrip ke
+ * halaman kita pada browser yang mengabaikan `'strict-dynamic'` (browser lama /
+ * proxy yang menurunkan CSP), dan (b) domain yang pindah kepemilikan menjadi
+ * jalur suplai skrip. Daftar ini harus kosong sampai memang ada CDN tetap yang
+ * perlu diizinkan — tambahkan hanya dengan alasan yang jelas + review.
+ */
+const TRUSTED_SCRIPT_DOMAINS: string[] = [];
 const TRUSTED_STYLES = [SELF, "'unsafe-inline'"]; // styles still need unsafe-inline (Next.js inline styles)
 const TRUSTED_IMAGES = [SELF, 'data:', 'blob:', 'https:'];
 // Media sources — blob: is required for HLS.js MediaSource playback, https: for

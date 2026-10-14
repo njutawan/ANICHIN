@@ -55,7 +55,7 @@ cp .env.example .env
 # Generate secure secrets
 NEXTAUTH_SECRET=$(openssl rand -base64 32)
 POSTGRES_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)
-TWO_FACTOR_KEY=$(openssl rand -base64 32)
+TWO_FACTOR_KEY=$(openssl rand -hex 32)   # 64 hex char (bukan base64!)
 
 # Edit .env file
 nano .env

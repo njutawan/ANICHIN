@@ -53,10 +53,14 @@ export default function LoginPage() {
 
     if (res?.error && step === 'credentials') {
       try {
+        // Endpoint ini hanya melaporkan apakah akun butuh langkah 2FA
+        // (tidak lagi memverifikasi kode — verifikasi TOTP terjadi di dalam
+        // alur signIn/NextAuth yang dilindungi lockout; lihat
+        // src/app/api/auth/2fa/verify/route.ts).
         const probe = await fetch('/api/auth/2fa/verify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, token: '000000' }),
+          body: JSON.stringify({ email }),
         });
         const data = await probe.json();
         if (data.requiresTwoFactor) {

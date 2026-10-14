@@ -97,10 +97,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Build response. In dev/no-SMTP, surface devUrl so QA can hit the link.
-    // In prod w/ SMTP, devUrl is undefined (token stays out of the response).
+    // Build response. `devUrl` (berisi token) HANYA untuk non-produksi.
+    //
+    // Sebelumnya respons ini ikut memuat devUrl di produksi tanpa SMTP, karena
+    // `sendVerificationEmail` selalu mengembalikan devUrl pada fallback console
+    // — artinya siapa pun yang mendaftar dengan alamat email orang lain bisa
+    // memverifikasi alamat itu tanpa akses ke inbox (token dibalas ke klien).
+    // Sekarang `deliverEmail` mengembalikan `delivered: false` + tanpa devUrl di
+    // produksi (lihat src/lib/email.ts), dan guard di bawah menjadi lapis kedua.
     const payload: { sent: boolean; devUrl?: string } = { sent: true };
-    if (result.devUrl) {
+    if (result.devUrl && process.env.NODE_ENV !== 'production') {
       payload.devUrl = result.devUrl;
     }
 

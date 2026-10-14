@@ -11,7 +11,7 @@ services:
     environment:
       - POSTGRES_DB=anichin_staging
       - POSTGRES_USER=anichin_staging
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-staging-password-change-me}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (jangan pakai default yang bisa ditebak)}
     ports:
       - "127.0.0.1:5433:5432"  # Different port from prod
     volumes:
@@ -44,7 +44,7 @@ services:
     command: ["bunx", "prisma", "migrate", "deploy"]
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgresql://anichin_staging:${POSTGRES_PASSWORD:-staging-password-change-me}@db:5432/anichin_staging?schema=public
+      - DATABASE_URL=postgresql://anichin_staging:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/anichin_staging?schema=public
     depends_on:
       db:
         condition: service_healthy
@@ -66,10 +66,10 @@ services:
       - "127.0.0.1:3001:3000"
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgresql://anichin_staging:${POSTGRES_PASSWORD:-staging-password-change-me}@db:5432/anichin_staging?schema=public
+      - DATABASE_URL=postgresql://anichin_staging:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/anichin_staging?schema=public
       - REDIS_URL=redis://redis:6379
-      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3001}
-      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-staging-secret-not-for-production-32-chars}
+      - NEXTAUTH_URL=${NEXTAUTH_URL:?NEXTAUTH_URL is required}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:?NEXTAUTH_SECRET is required (staging juga memakai cookie/JWT bertanda tangan)}
       - NEXT_TELEMETRY_DISABLED=1
       - HOSTNAME=0.0.0.0
       - PORT=3000
