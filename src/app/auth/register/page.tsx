@@ -208,6 +208,7 @@ export default function RegisterPage() {
                 className="pl-9 pr-10"
                 required
                 autoComplete="new-password"
+                maxLength={PASSWORD_MAX_BYTES}
               />
               <button
                 type="button"
@@ -253,6 +254,7 @@ export default function RegisterPage() {
                 className="pl-9 pr-10"
                 required
                 autoComplete="new-password"
+                maxLength={PASSWORD_MAX_BYTES}
                 aria-invalid={!!confirmPassword && !passwordsMatch}
               />
               <button

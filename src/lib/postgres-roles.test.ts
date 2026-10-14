@@ -67,6 +67,23 @@ describe('docker-compose — pemisahan role aplikasi vs migrasi (F-16)', () => {
   it('skrip role tersedia di runner (bukan hanya di container)', () => {
     expect(existsSync(path.join(repoRoot, 'scripts/postgres-init/10-app-role.sh'))).toBe(true);
   });
+
+  it('ada service `db-roles` yang menyiapkan role pada setiap `up` (database lama)', () => {
+    for (const compose of [prodCompose, stagingCompose]) {
+      const dbRoles = serviceBlock(compose, 'db-roles');
+      expect(dbRoles).toContain('entrypoint: ["sh", "/docker-entrypoint-initdb.d/10-app-role.sh"]');
+      expect(dbRoles).toContain('./scripts/postgres-init:/docker-entrypoint-initdb.d:ro');
+      // Perlu kredensial owner + alamat db (psql jalan di container terpisah).
+      expect(dbRoles).toContain('PGHOST=db');
+      expect(dbRoles).toContain('PGPASSWORD=${POSTGRES_PASSWORD:?');
+      expect(dbRoles).toContain('POSTGRES_APP_PASSWORD=${POSTGRES_APP_PASSWORD:?');
+      // Urutan: setelah migrate, dan web menunggu service ini selesai.
+      expect(dbRoles).toMatch(/migrate:\n\s+condition: service_completed_successfully/);
+    }
+
+    expect(serviceBlock(prodCompose, 'web')).toMatch(/db-roles:\n\s+condition: service_completed_successfully/);
+    expect(serviceBlock(stagingCompose, 'web')).toMatch(/db-roles:\n\s+condition: service_completed_successfully/);
+  });
 });
 
 describe('scripts/postgres-init/10-app-role.sh (F-16)', () => {

@@ -56,6 +56,36 @@ services:
       db:
         condition: service_healthy
 
+  # ─────────────────────────────────────────────────────────────
+  # db-roles — pastikan role aplikasi (DML saja) ada & sinkron (F-16)
+  # Dijalankan setiap `up` dan idempoten. Diperlukan karena skrip initdb
+  # di entrypoint postgres hanya jalan pada VOLUME YANG MASIH KOSONG:
+  # database yang sudah ada (hasil deploy sebelum pemisahan role) tidak akan
+  # punya role aplikasi, dan tanpa langkah ini `web` akan gagal konek.
+  # Urutannya setelah `migrate` supaya tabel baru sekaligus tercakup GRANT
+  # eksplisit (selain ALTER DEFAULT PRIVILEGES).
+  # ─────────────────────────────────────────────────────────────
+  db-roles:
+    image: postgres:16-alpine
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      - PGHOST=db
+      - PGPORT=5432
+      - POSTGRES_DB=anichin_staging
+      - POSTGRES_USER=anichin_staging
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - PGPASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - POSTGRES_APP_USER=anichin_staging_app
+      - POSTGRES_APP_PASSWORD=${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD is required (role aplikasi DML-only)}
+    entrypoint: ["sh", "/docker-entrypoint-initdb.d/10-app-role.sh"]
+    volumes:
+      - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
+
   web:
     build:
       context: .
@@ -85,6 +115,9 @@ services:
       db:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      # F-16: role aplikasi wajib ada sebelum web start.
+      db-roles:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]

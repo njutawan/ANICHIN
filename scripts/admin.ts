@@ -14,6 +14,9 @@
 
 import { db } from '../src/lib/db';
 import { hashSync, isValidEmail } from '../src/lib/auth';
+// F-17: batas bcrypt 72 byte — CLI ini juga menetapkan password, jadi aturannya
+// harus sama dengan register/reset (bcrypt memotong sisanya tanpa error).
+import { PASSWORD_MAX_BYTES, isPasswordTooLong } from '../src/lib/security';
 
 const command = process.argv[2];
 const arg1 = process.argv[3]; // email
@@ -31,6 +34,10 @@ async function createAdmin(email: string, name: string, password: string) {
   }
   if (password.length < 6 || !/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) {
     console.error('✗ Password minimal 6 karakter, harus ada huruf + angka');
+    process.exit(1);
+  }
+  if (isPasswordTooLong(password)) {
+    console.error(`✗ Password terlalu panjang (maksimal ${PASSWORD_MAX_BYTES} byte; karakter non-ASCII dihitung lebih dari satu)`);
     process.exit(1);
   }
 
@@ -113,6 +120,10 @@ async function resetPassword(email: string, newPassword: string) {
   }
   if (newPassword.length < 6 || !/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
     console.error('✗ Password minimal 6 karakter, harus ada huruf + angka');
+    process.exit(1);
+  }
+  if (isPasswordTooLong(newPassword)) {
+    console.error(`✗ Password terlalu panjang (maksimal ${PASSWORD_MAX_BYTES} byte; karakter non-ASCII dihitung lebih dari satu)`);
     process.exit(1);
   }
   await db.user.update({

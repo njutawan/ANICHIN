@@ -157,7 +157,7 @@ export default function ResetPasswordPage() {
                 required
                 autoComplete="new-password"
                 minLength={6}
-                maxLength={1024}
+                maxLength={PASSWORD_MAX_BYTES}
               />
               <button
                 type="button"
@@ -204,7 +204,7 @@ export default function ResetPasswordPage() {
                 required
                 autoComplete="new-password"
                 minLength={6}
-                maxLength={1024}
+                maxLength={PASSWORD_MAX_BYTES}
               />
             </div>
             {confirmPassword && password !== confirmPassword && (

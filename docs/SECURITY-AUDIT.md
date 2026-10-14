@@ -36,13 +36,13 @@
 
 ```
 npm audit --omit=dev   → 0 vulnerabilities (311 dependensi produksi)
-npx vitest run         → 448 test lulus (47 dari 48 file); 1 suite butuh `prisma generate`
+npx vitest run         → 455 test lulus (48 dari 49 file); 1 suite butuh `prisma generate`
                          (sandbox ini tidak bisa mengunduh engine Prisma; di CI normal)
 npx tsc --noEmit       → bersih
 npx eslint .           → bersih
 ```
 
-**Perubahan kode pada audit ini:** **19 temuan diperbaiki** (F-01…F-19) — **tidak ada temuan terbuka** — ditambah **153 test regresi** baru (14 pada audit awal, 27 pada lanjutan F-06/F-18, 22 pada lanjutan F-07/F-19, 38 pada lanjutan F-10, 52 pada batch penutup F-11…F-17).
+**Perubahan kode pada audit ini:** **19 temuan diperbaiki** (F-01…F-19) — **tidak ada temuan terbuka** — ditambah **160 test regresi** baru (14 pada audit awal, 27 pada lanjutan F-06/F-18, 22 pada lanjutan F-07/F-19, 38 pada lanjutan F-10, 52 pada batch penutup F-11…F-17, 7 pada verifikasi ulang lintas-jalur).
 
 ---
 
@@ -204,15 +204,17 @@ Prefix hilang karena `cookies` dikonfigurasi manual di `authOptions`. Sekarang `
 1. Skrip baru `scripts/postgres-init/10-app-role.sh` (idempoten) membuat role aplikasi (`anichin_app` / `anichin_staging_app`) dengan `LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`, hanya `CONNECT` + `USAGE` pada schema `public` + `SELECT/INSERT/UPDATE/DELETE` pada tabel & `USAGE/SELECT` pada sequence, plus `REVOKE CREATE ON SCHEMA public`. `ALTER DEFAULT PRIVILEGES FOR ROLE <owner>` memastikan tabel hasil migrasi **berikutnya** otomatis bisa diakses aplikasi.
 2. Password tidak pernah masuk argv atau dirangkai ke SQL: dibaca dengan `\getenv` lalu di-quote di server dengan `format(%I, %L)` + `\gexec`.
 3. `docker-compose.{prod,staging}.yml`: `web` memakai `postgresql://…_app:${POSTGRES_APP_PASSWORD:?}` sedangkan `migrate` & `backup-cron` tetap role owner (`POSTGRES_PASSWORD`) — dua kredensial berbeda; skrip init di-mount ke `/docker-entrypoint-initdb.d` (jalan otomatis pada volume kosong).
-4. `scripts/compose-deploy.sh` menjalankan skrip itu lewat `docker compose exec` **sebelum** `up` (setelah db siap) sehingga database yang sudah ada ikut ter-provision — bukan hanya instalasi baru; kegagalan provisioning menghentikan deploy, bukan menghasilkan `web` yang tidak bisa konek.
+4. **Database yang sudah ada ter-provision otomatis, lewat dua jalur:** service baru `db-roles` di kedua compose menjalankan skrip itu pada **setiap** `up` (setelah `db` sehat & `migrate` selesai; meniru mekanisme initdb yang hanya jalan pada volume kosong), dan `web` `depends_on: db-roles: service_completed_successfully` sehingga tidak pernah start tanpa role aplikasi. `scripts/compose-deploy.sh` juga memanggil skrip yang sama lewat `docker compose exec` sebelum `up` (idempoten, dengan pesan kesalahan yang jelas).
 5. Kredensial baru diteruskan pipeline: secret `POSTGRES_APP_PASSWORD` (produksi) & `STAGING_POSTGRES_APP_PASSWORD` (staging) masuk ke `.env` server; `.env.example`, `README.md`, `docs/DEPLOYMENT.md`, `docs/PRODUCTION-OAUTH.md`, dan `scripts/setup-github-secrets.sh` diperbarui.
-**Regression test:** `src/lib/postgres-roles.test.ts` (10 — `web` ≠ `migrate` per compose, guard `${POSTGRES_APP_PASSWORD:?}`, mount skrip, isi skrip hanya DML + tanpa hak istimewa, urutan provisioning sebelum `up`).
+**Regression test:** `src/lib/postgres-roles.test.ts` (11 — `web` ≠ `migrate` per compose, guard `${POSTGRES_APP_PASSWORD:?}`, mount skrip, isi skrip hanya DML + tanpa hak istimewa, urutan provisioning sebelum `up`, dan service `db-roles`).
+**Temuan verifikasi ulang (ikut diperbaiki):** database lama yang di-`up` **tanpa** `compose-deploy.sh` (mis. `docker compose up -d` manual) masih bisa kehabisan role aplikasi karena initdb hanya jalan pada volume kosong. Ditambahkan service `db-roles` di kedua compose yang menjalankan skrip idempoten itu pada setiap `up`; `web` menunggu (`service_completed_successfully`) sehingga tidak pernah start tanpa role.
 
 #### F-17 — [Info] bcrypt memotong password pada 72 byte ✅ DIPERBAIKI
 
 **Bukti:** register menerima 128 karakter dan reset 1024 karakter, sedangkan bcrypt hanya memakai 72 byte pertama — password panjang memberi rasa aman yang tidak nyata (dan password non-ASCII jauh lebih cepat mencapai batas itu).
 **Perbaikan (opsi pertama rekomendasi audit: batasi maksimum 72 byte):** konstanta `PASSWORD_MAX_BYTES = 72` + `utf8ByteLength()`/`isPasswordTooLong()` di `src/lib/security.ts`; register & reset-password menolak >72 byte dengan pesan yang menyebut batasnya (bukan lagi "6-1024 karakter"); halaman register & reset memakai penghitungan byte yang sama sehingga tombol submit sudah tidak aktif. **Login sengaja tidak dibatasi** supaya akun lama yang passwordnya terlanjur panjang tetap bisa masuk.
 **Regression test:** `src/lib/security.test.ts` (blok batas bcrypt) + `src/app/api/auth/register/route.test.ts` (72 byte lolos, 73 ditolak, `é` dihitung per byte, 100 karakter ASCII ditolak meski <128 karakter).
+**Temuan verifikasi ulang (ikut diperbaiki):** jalur password lain yang terlewat — CLI operator `scripts/admin.ts` (`create` & `reset-password`) belum memakai batas itu, dan form register/reset masih memakai `maxLength={1024}`. Keduanya kini memakai `PASSWORD_MAX_BYTES`/`isPasswordTooLong` yang sama, dijaga oleh `src/lib/security-consistency.test.ts`.
 
 ---
 
@@ -248,6 +250,7 @@ Prefix hilang karena `cookies` dikonfigurasi manual di `authOptions`. Sekarang `
 3. **Kontrol DB lanjutan:** role owner masih superuser bawaan image postgres (dibutuhkan `pg_dump`/restore). Bila ingin lebih ketat, turunkan menjadi non-superuser + `GRANT CREATE` eksplisit, lalu uji ulang `scripts/restore-db.sh`.
 4. **Hash password:** pertimbangkan `argon2id` (atau bcrypt cost 12) bila anggaran CPU memungkinkan; bcrypt cost 10 tetap wajar untuk saat ini.
 5. **Monitoring:** kirim `logs/audit.jsonl` (IP sudah di-HMAC) ke log terpusat dan pasang alert untuk pola `login gagal berulang`, `kode cadangan 2FA dipakai`, dan lonjakan 429.
+6. **Trade-off yang sadar (bukan temuan baru):** `POST /api/auth/2fa/verify` mengembalikan `{ requiresTwoFactor }` untuk email apa pun — formulir login memerlukannya untuk membedakan "password salah" dari "butuh kode 2FA". Artinya status "email ini terdaftar & ber-2FA" bisa diprobe (tanpa verifikasi kode, tanpa lockout) selama rate limit `auth` (20/menit per IP) belum tercapai. Dibiarkan karena tanpa itu UX 2FA harus menebak; kalau ingin ditutup, endpoint ini harus memverifikasi password terlebih dahulu (mis. menerima `{ email, password }`) atau dihapus dan alur 2FA dipindah ke satu form.
 
 > Catatan migrasi: deploy **wajib** menjalankan `prisma migrate deploy` (service `migrate`
 > di `docker-compose.prod.yml`, atau `bun run db:migrate:prod`) sebelum versi baru menerima
@@ -264,7 +267,7 @@ Prefix hilang karena `cookies` dikonfigurasi manual di `authOptions`. Sekarang `
 npm ci && npx prisma generate          # CI resmi
 npm audit --omit=dev                   # wajib 0 vulnerability (dipakai CI)
 npx tsc --noEmit && npx eslint .
-npx vitest run                         # 448 test, termasuk 153 regresi audit ini
+npx vitest run                         # 455 test, termasuk 160 regresi audit ini
 # uji manual cepat (dev):
 #   1. Tanpa SMTP + NODE_ENV=production → POST /api/auth/send-verification
 #      tidak boleh memuat devUrl, dan log tidak memuat ?token=
@@ -293,7 +296,8 @@ npx vitest run                         # 448 test, termasuk 153 regresi audit in
 #      "javascript:alert(1)" → 400; banner/trailer tidak valid tersimpan null
 #  11. Pipeline (F-15): hapus secret DEPLOY_HOST_KEY → workflow harus GAGAL di
 #      langkah "Siapkan SSH" (bukan deploy diam-diam tanpa verifikasi); pastikan
-#      `grep -rn "StrictHostKeyChecking=no" .github/workflows` kosong
+#      `grep -rn "StrictHostKeyChecking=no" .github/workflows | grep -v '#'`
+#      kosong (yang tersisa hanya komentar/annotation penjelas)
 #  12. Role DB (F-16): di server, `docker compose exec -T db psql -U anichin -d
 #      anichin -c "\du anichin_app"` → bukan superuser; lalu uji aplikasi tetap
 #      bisa tulis (`UPDATE`/`INSERT`) dan DDL ditolak:

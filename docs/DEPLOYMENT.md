@@ -238,9 +238,11 @@ gh secret set STAGING_POSTGRES_APP_PASSWORD --body "$(openssl rand -hex 32)"
 # compose sebagai /docker-entrypoint-initdb.d sehingga otomatis jalan saat
 # volume database masih kosong).
 #
-# DATABASE SUDAH ADA (instalasi lama)? Entrypoint initdb tidak jalan lagi, jadi
-# jalankan sekali di server sebelum deploy berikutnya — pipeline juga
-# melakukannya otomatis lewat scripts/compose-deploy.sh, tapi manual lebih jelas:
+# DATABASE SUDAH ADA (instalasi lama)? Entrypoint initdb tidak jalan lagi pada
+# volume yang sudah terisi — tetapi compose sekarang punya service `db-roles`
+# yang menjalankan skrip yang sama setiap `up` (idempoten), dan `web` menunggu
+# service itu selesai. Jadi `docker compose up -d` sudah cukup. Kalau ingin
+# menjalankannya manual (mis. untuk memeriksa outputnya):
 #   cd /opt/anichin-production
 #   docker compose -f docker-compose.prod.yml up -d db
 #   docker compose -f docker-compose.prod.yml exec -T db \

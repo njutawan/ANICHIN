@@ -22,7 +22,7 @@
 #   - DATABASE_URL (constructed from POSTGRES_PASSWORD)
 #   - REDIS_URL
 #   - SITE_DOMAIN
-#   - DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY
+#   - DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_HOST_KEY
 # ============================================================================
 
 set -euo pipefail
@@ -184,6 +184,33 @@ read -p "  Deploy server IP/hostname: " DEPLOY_HOST
 read -p "  SSH user (e.g., deploy): " DEPLOY_USER
 read -p "  Path to SSH private key file: " SSH_KEY_PATH
 
+# F-15: host key SSH yang dipin untuk pipeline (secret DEPLOY_HOST_KEY).
+# ssh-keyscan di sini hanya ALAT BANTU: fingerprint yang ditampilkan WAJIB
+# dicocokkan dengan kunci server sebenarnya sebelum disimpan — kalau tidak,
+# trust-on-first-use hanya berpindah dari runner ke laptop ini.
+SSH_HOST_KEY=""
+if [ -n "${DEPLOY_HOST:-}" ] && command -v ssh-keyscan >/dev/null 2>&1; then
+    echo ""
+    echo "Mengambil host key dari $DEPLOY_HOST (ssh-keyscan)…"
+    SSH_HOST_KEY=$(ssh-keyscan -H "$DEPLOY_HOST" 2>/dev/null || true)
+    if [ -n "$SSH_HOST_KEY" ]; then
+        HOST_KEY_TMP=$(mktemp)
+        printf '%s\n' "$SSH_HOST_KEY" > "$HOST_KEY_TMP"
+        echo "Fingerprint kunci yang terbaca:"
+        ssh-keygen -lf "$HOST_KEY_TMP" 2>/dev/null || true
+        rm -f "$HOST_KEY_TMP"
+        echo -e "${WARN} Cocokkan fingerprint di atas dengan kunci server sebenarnya"
+        echo -e "${WARN} (panel hosting / konsol / 'ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub' di server)."
+        read -p "  Simpan kunci ini sebagai secret DEPLOY_HOST_KEY? (y/N): " SAVE_HOST_KEY
+        if [[ ! "${SAVE_HOST_KEY:-N}" =~ ^[Yy]$ ]]; then
+            SSH_HOST_KEY=""
+            echo -e "${WARN} Dilewati — isi DEPLOY_HOST_KEY manual sebelum men-deploy, kalau tidak workflow akan berhenti di langkah 'Siapkan SSH'."
+        fi
+    else
+        echo -e "${WARN} ssh-keyscan tidak mengembalikan kunci — DEPLOY_HOST_KEY dilewati."
+    fi
+fi
+
 if [ ! -f "$SSH_KEY_PATH" ]; then
     echo -e "${CROSS} SSH key file not found: $SSH_KEY_PATH"
     echo ""
@@ -234,6 +261,7 @@ echo "  Deploy:"
 echo "    DEPLOY_HOST                 = $DEPLOY_HOST"
 echo "    DEPLOY_USER                 = $DEPLOY_USER"
 echo "    DEPLOY_SSH_KEY              = [SSH private key contents]"
+echo "    DEPLOY_HOST_KEY             = [known_hosts entry for $DEPLOY_HOST]"
 echo "    SITE_DOMAIN                 = $SITE_DOMAIN"
 [ -n "${REGISTRY:-}" ] && echo "    REGISTRY                    = $REGISTRY"
 [ -n "${SLACK_WEBHOOK:-}" ] && echo "    SLACK_WEBHOOK               = [set]"
@@ -272,6 +300,10 @@ set_secret "OAUTH_GITHUB_CLIENT_ID" "$GITHUB_CLIENT_ID"
 set_secret "OAUTH_GITHUB_CLIENT_SECRET" "$GITHUB_CLIENT_SECRET"
 
 # Database (constructed)
+# Catatan: pipeline deploy TIDAK memakai secret DATABASE_URL (compose membentuk
+# URL-nya sendiri). Yang disimpan di sini adalah URL ROLE MIGRASI/owner — jangan
+# dipakai untuk menjalankan aplikasi, karena service `web` memakai role DML-only
+# `anichin_app` lewat POSTGRES_APP_PASSWORD (audit F-16).
 DATABASE_URL="postgresql://anichin:${POSTGRES_PASSWORD}@db:5432/anichin?schema=public"
 set_secret "POSTGRES_PASSWORD" "$POSTGRES_PASSWORD"
 set_secret "POSTGRES_APP_PASSWORD" "$POSTGRES_APP_PASSWORD"
@@ -282,6 +314,16 @@ set_secret "REDIS_URL" "redis://redis:6379"
 set_secret "DEPLOY_HOST" "$DEPLOY_HOST"
 set_secret "DEPLOY_USER" "$DEPLOY_USER"
 set_secret "DEPLOY_SSH_KEY" "$SSH_KEY_CONTENT"
+
+# F-15: host key SSH yang dipin. Diambil dari server memakai ssh-keyscan, TETAPI
+# fingerprint-nya wajib dicocokkan dengan kunci server sebenarnya (panel hosting /
+# konsol / `ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub` di server) sebelum dipakai —
+# kalau tidak, keyscan ini hanya memindahkan masalah TOFU dari runner ke laptop.
+if [ -n "${SSH_HOST_KEY:-}" ]; then
+    set_secret "DEPLOY_HOST_KEY" "$SSH_HOST_KEY"
+else
+    echo -e "  ${WARN} DEPLOY_HOST_KEY dilewati — jalankan: ssh-keyscan -H $DEPLOY_HOST > deploy_host_key.txt, cocokkan fingerprint-nya, lalu: gh secret set DEPLOY_HOST_KEY < deploy_host_key.txt"
+fi
 set_secret "SITE_DOMAIN" "$SITE_DOMAIN"
 
 # Optional
