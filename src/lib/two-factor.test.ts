@@ -12,6 +12,10 @@ import {
   generateTwoFactorSecret,
   verifyTwoFactorToken,
   generateBackupCodes,
+  normalizeBackupCode,
+  isBackupCode,
+  hashBackupCodes,
+  matchBackupCodeHash,
   encryptSecret,
   decryptSecret,
 } from '@/lib/two-factor';
@@ -88,17 +92,17 @@ describe('generateBackupCodes', () => {
     expect(codes).toHaveLength(8);
   });
 
-  it('codes are in XXXX-XXXX format', () => {
+  it('codes are in XXXXX-XXXXX format (5 byte / 40 bit per kode, F-10)', () => {
     const codes = generateBackupCodes();
     codes.forEach((code) => {
-      expect(code).toMatch(/^[A-F0-9]{4}-[A-F0-9]{4}$/);
+      expect(code).toMatch(/^[A-F0-9]{5}-[A-F0-9]{5}$/);
     });
   });
 
   it('generates unique codes', () => {
     const codes = generateBackupCodes();
     const unique = new Set(codes);
-    // Statistically extremely unlikely to collide with 8 codes from 32 bits each.
+    // Statistically extremely unlikely to collide with 8 codes from 40 bits each.
     expect(unique.size).toBe(8);
   });
 
@@ -157,5 +161,74 @@ describe('encryptSecret / decryptSecret', () => {
   it('throws on malformed payload', () => {
     expect(() => decryptSecret('not-a-valid-payload')).toThrow(/invalid payload format/i);
     expect(() => decryptSecret('')).toThrow(/empty payload/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Kode cadangan 2FA (audit F-10)
+// ---------------------------------------------------------------------------
+
+describe('generateBackupCodes (F-10)', () => {
+  it('menghasilkan format XXXXX-XXXXX (hex) yang unik', () => {
+    const codes = generateBackupCodes(8);
+
+    expect(codes).toHaveLength(8);
+    for (const code of codes) {
+      expect(code).toMatch(/^[0-9A-F]{5}-[0-9A-F]{5}$/);
+    }
+    expect(new Set(codes).size).toBe(8);
+  });
+
+  it('entropi 5 byte per kode (format lama 4 byte dinaikkan)', () => {
+    const codes = generateBackupCodes(20);
+    // 40 bit ruang kunci: 20 kode acak tidak boleh bertabrakan.
+    expect(new Set(codes).size).toBe(20);
+  });
+});
+
+describe('normalizeBackupCode / isBackupCode (F-10)', () => {
+  it('menormalkan huruf kecil, spasi, dan kode tanpa dash', () => {
+    expect(normalizeBackupCode('abcde-f1234')).toBe('ABCDE-F1234');
+    expect(normalizeBackupCode('ABCDE-F1234')).toBe('ABCDE-F1234');
+    expect(normalizeBackupCode('abcde f1234')).toBe('ABCDE-F1234');
+    expect(normalizeBackupCode('ABCDEF1234')).toBe('ABCDE-F1234');
+    expect(normalizeBackupCode('  ABCDE-F1234  ')).toBe('ABCDE-F1234');
+  });
+
+  it('menolak input yang bukan kode cadangan', () => {
+    for (const bad of ['', '12345', '123456', 'ABCDE-F123', 'ABCDE-F12345', 'ZZZZZ-FFFFF', 'ABCDE_F1234', null, undefined, 123456]) {
+      expect(normalizeBackupCode(bad)).toBeNull();
+      expect(isBackupCode(bad)).toBe(false);
+    }
+  });
+
+  it('kode hasil generate selalu lolos normalisasi (round-trip)', () => {
+    for (const code of generateBackupCodes(8)) {
+      expect(normalizeBackupCode(code.toLowerCase())).toBe(code);
+    }
+  });
+});
+
+describe('hashBackupCodes / matchBackupCodeHash (F-10)', () => {
+  it('hash bcrypt dan hanya cocok dengan kode yang benar', async () => {
+    const [code] = generateBackupCodes(1);
+    const [hash] = await hashBackupCodes([code]);
+
+    expect(hash).toMatch(/^\$2[aby]\$/);
+    expect(hash).not.toContain(code);
+    await expect(matchBackupCodeHash(code, [hash])).resolves.toBe(0);
+    await expect(matchBackupCodeHash('FFFFF-FFFFF', [hash])).resolves.toBe(-1);
+  });
+
+  it('menemukan indeks hash yang cocok di antara beberapa kode', async () => {
+    const codes = generateBackupCodes(4);
+    const hashes = await hashBackupCodes(codes);
+
+    await expect(matchBackupCodeHash(codes[0], hashes)).resolves.toBe(0);
+    await expect(matchBackupCodeHash(codes[3], hashes)).resolves.toBe(3);
+  });
+
+  it('daftar hash kosong → -1', async () => {
+    await expect(matchBackupCodeHash('ABCDE-F1234', [])).resolves.toBe(-1);
   });
 });

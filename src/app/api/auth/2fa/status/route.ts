@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/session';
 import { checkRateLimit, addRateLimitHeaders } from '@/lib/rate-limit';
 import { db } from '@/lib/db';
+import { countRemainingBackupCodes } from '@/lib/two-factor-backup';
 
 /**
  * GET /api/auth/2fa/status
@@ -11,7 +12,10 @@ import { db } from '@/lib/db';
  * Used by the 2FA settings page to render the correct initial state
  * (enable vs. disable flow).
  *
- * Response: { enabled: boolean }
+ * Response: { enabled: boolean, backupCodesRemaining: number }
+ *
+ * `backupCodesRemaining` dipakai halaman /auth/2fa untuk memperingatkan pengguna
+ * yang kode cadangannya sudah habis/terpakai (F-10).
  *
  * Rate limit: read tier (60 req/60s).
  */
@@ -37,8 +41,16 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    // Hitung kode cadangan yang belum terpakai — hanya bila 2FA aktif.
+    const backupCodesRemaining = user.twoFactorEnabled
+      ? await countRemainingBackupCodes(userId)
+      : 0;
+
     return addRateLimitHeaders(
-      NextResponse.json({ enabled: user.twoFactorEnabled }, { status: 200 }),
+      NextResponse.json(
+        { enabled: user.twoFactorEnabled, backupCodesRemaining },
+        { status: 200 }
+      ),
       'read'
     );
   } catch (err) {

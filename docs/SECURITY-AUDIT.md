@@ -3,7 +3,7 @@
 **Tanggal:** 2026-10-14
 **Skop:** seluruh repo `njutawan/ANICHIN` (Next.js 16 App Router + NextAuth v4 + Prisma/PostgreSQL + Docker/Caddy + GitHub Actions)
 **Commit dasar:** `eb52573` (branch `arena/c4ede340-anichin`)
-**Terakhir diperbarui:** 2026-10-15 — F-07 & F-19 (`src/lib/auth.ts`, `src/app/auth/login/page.tsx`)
+**Terakhir diperbarui:** 2026-10-15 — F-07 & F-19 (`src/lib/auth.ts`, `src/app/auth/login/page.tsx`), F-10 (`src/lib/two-factor*.ts`, migrasi `20261015140000`)
 **Metode:** pembacaan kode baris-per-baris pada jalur auth/data/DB/deploy, pemindaian seluruh objek Git (344 blob, semua branch), `npm audit`, dan menjalankan test suite.
 
 ---
@@ -28,7 +28,7 @@
 | 14 | DB jangan public | ✅ | Compose mengikat `127.0.0.1:5432` / `127.0.0.1:6379` / `127.0.0.1:3000`; hanya Caddy yang publik; `POSTGRES_PASSWORD` wajib (`:?`); volume terpisah; WAL archiving (yang dulu bisa memenuhi disk) sengaja dihapus. |
 | 15 | DB permission ketat | ⚠️ | Kredensial kuat & port lokal sudah benar, tetapi aplikasi memakai role **pemilik DB** (bisa DDL). Lihat **F-16** (least privilege). |
 | 16 | Hash password | ✅ | bcrypt cost 10 di register, reset, dan user OAuth (password acak 32 byte). **F-08 (kunci 2FA salah format) diperbaiki.** |
-| 17 | Session aman | ✅ | Cookie `httpOnly` + `SameSite=Lax` + `Secure` + prefix `__Secure-`/`__Host-` (prod), JWT 7 hari / sesi 30 hari, secret produksi wajib (tanpa fallback), dan **pencabutan sesi** lewat `User.sessionVersion` (F-06) + nama cookie terpusat (F-09/F-18). |
+| 17 | Session aman | ✅ | Cookie `httpOnly` + `SameSite=Lax` + `Secure` + prefix `__Secure-`/`__Host-` (prod), JWT 7 hari / sesi 30 hari, secret produksi wajib (tanpa fallback), **pencabutan sesi** lewat `User.sessionVersion` (F-06) + nama cookie terpusat (F-09/F-18), dan **kode cadangan 2FA** tersimpan sebagai hash + sekali pakai (F-10) sebagai jalur pemulihan. |
 | 18 | Reset password aman | ✅ | Token 32 byte CSPRNG, sekali pakai, kedaluwarsa 1 jam, semua token lain dibatalkan dalam transaksi, pesan generik anti-enumeration, dan **semua sesi lama dicabut** (`sessionVersion`) saat password diganti. **F-02 & template email diperbaiki.** |
 | 19 | Batasi file upload | ➖ | **Tidak ada fitur upload** (tidak ada `formData()`/multipart/tulis file dari request). Yang ada hanya URL gambar eksternal dari admin (lihat F-14) dan optimizer `next/image` yang host-nya sudah di-allowlist. |
 
@@ -36,13 +36,13 @@
 
 ```
 npm audit --omit=dev   → 0 vulnerabilities (311 dependensi produksi)
-npx vitest run         → 358 test lulus (40 dari 41 file); 1 suite butuh `prisma generate`
+npx vitest run         → 396 test lulus (43 dari 44 file); 1 suite butuh `prisma generate`
                          (sandbox ini tidak bisa mengunduh engine Prisma; di CI normal)
 npx tsc --noEmit       → bersih
 npx eslint .           → bersih
 ```
 
-**Perubahan kode pada audit ini:** **11 temuan diperbaiki** (F-01…F-09, F-18, F-19), **8 masih terbuka** (F-10…F-17), ditambah **63 test regresi** baru (14 pada audit awal, 27 pada lanjutan F-06/F-18, 22 pada lanjutan F-07/F-19).
+**Perubahan kode pada audit ini:** **12 temuan diperbaiki** (F-01…F-10, F-18, F-19), **7 masih terbuka** (F-11…F-17), ditambah **101 test regresi** baru (14 pada audit awal, 27 pada lanjutan F-06/F-18, 22 pada lanjutan F-07/F-19, 38 pada lanjutan F-10).
 
 ---
 
@@ -141,11 +141,24 @@ Prefix hilang karena `cookies` dikonfigurasi manual di `authOptions`. Sekarang `
 **Catatan:** pengguna yang mengaktifkan 2FA memang kehilangan tombol OAuth — ini konsekuensi yang diterima: satu-satunya alternatif aman adalah meminta kode TOTP setelah OAuth, yang berarti menambah langkah kustom di luar alur NextAuth.
 **Regression test:** `src/lib/oauth-linking.test.ts` — kasus "akun lokal memakai 2FA → ditolak" untuk Google dan GitHub.
 
+#### F-10 — [Rendah] Kode cadangan 2FA ditampilkan sekali tetapi tidak pernah disimpan ✅ DIPERBAIKI
+
+**Bukti:** `generateBackupCodes()` menghasilkan 8 kode, `/api/auth/2fa/enable` mengirimkannya ke klien, lalu kode itu tidak pernah ditulis ke database — skema `User` tidak punya kolomnya. `authorize()` hanya memverifikasi TOTP, dan `SECURITY.md` bahkan mencantumkan bahwa kode cadangan **tidak bisa** dipakai login.
+**Dampak:** janji "simpan kode cadangan" di UI tidak punya arti. Pengguna yang kehilangan authenticator (HP hilang/rusak, app ter-reset) **terkunci permanen** dari akunnya sendiri — termasuk akun admin — karena 2FA (dan F-19) mewajibkan faktor kedua saat login. Ini juga satu-satunya jalur pemulihan mandiri: reset password tidak membantu karena 2FA tetap diminta setelahnya.
+**Perbaikan:**
+1. **Model baru `TwoFactorBackupCode`** (migrasi `20261015140000_add_2fa_backup_codes`): `userId`, `codeHash`, `usedAt`, `createdAt`, index `(userId, usedAt)`, `onDelete: Cascade`. Tabel terpisah dipakai (bukan satu kolom `String[]`) supaya tiap kode punya status "terpakai" masing-masing — syarat untuk semantik sekali pakai yang atomik.
+2. **Hanya hash bcrypt yang disimpan** (`hashBackupCodes`, cost 10). Kode plaintext hanya hidup selama respons pembuatan. Entropi tiap kode dinaikkan dari 4 byte (32 bit) ke **5 byte (40 bit)**, format `XXXXX-XXXXX`; input dinormalkan (`normalizeBackupCode`) sehingga huruf kecil / tanpa dash tetap diterima.
+3. **Sekali pakai yang benar-benar atomik:** `consumeBackupCode()` mencari kode yang cocok, lalu mengklaim dengan `updateMany({ where: { id, usedAt: null }, data: { usedAt: now } })` dan hanya lanjut bila `count === 1`. Dua login bersamaan dengan kode yang sama → hanya satu yang lolos.
+4. **Login menerima TOTP atau kode cadangan** di kolom yang sama (`authorize()`): TOTP diverifikasi lebih dulu, kode cadangan hanya dicoba bila bentuknya kode cadangan. Semuanya tetap di dalam alur yang diperiksa `isAccountLocked()` dan mencatat `recordFailedAttempt`, jadi brute-force kode ikut dibatasi 5 percobaan/15 menit per email+IP. Akun `twoFactorEnabled` tanpa secret sekarang juga wajib faktor kedua (sebelumnya dilewatkan).
+5. **Pemulihan kode:** endpoint baru `POST /api/auth/2fa/backup-codes` (wajib login **dan** password) membuat 8 kode baru dan menghapus semua kode lama dalam satu transaksi; `/api/auth/2fa/status` mengembalikan `backupCodesRemaining`; halaman `/auth/2fa` menampilkan sisa kode, memperingatkan saat 0, dan menyediakan form regenerate. `disable` menghapus semua kode.
+6. Halaman login menerima masukan `XXXXX-XXXXX` pada langkah 2FA dan memberi tahu bahwa kode cadangan bisa dipakai sebagai pengganti authenticator.
+**Catatan:** kode cadangan sengaja tidak kedaluwarsa (sama seperti GitHub/Google) — selama belum dipakai ia tetap berlaku; regenerate kapan saja membatalkan semuanya. Regenerate tidak mencabut sesi (`sessionVersion`) karena kode cadangan tidak menjaga sesi berjalan.
+**Regression test:** `src/lib/two-factor-backup.test.ts` (10), `src/lib/auth-2fa-login.test.ts` (11 — TOTP tetap bisa login, kode cadangan sekali pakai, huruf kecil/tanpa dash, error DB fail closed, akun terkunci), `src/app/api/auth/2fa/backup-codes/route.test.ts` (9), tambahan `src/lib/two-factor.test.ts` (8).
+
 ### Dilaporkan (belum diubah — butuh keputusan/uji lanjutan)
 
 | ID | Sev | Temuan | Bukti | Rekomendasi |
 |---|:--:|---|---|---|
-| **F-10** | Rendah | *Backup code* 2FA ditampilkan sekali tetapi **tidak disimpan** (skema belum punya kolom) → tidak bisa dipakai login; pengguna yang kehilangan authenticator tidak punya jalur pemulihan | `src/lib/two-factor.ts` (`generateBackupCodes`), `src/app/api/auth/2fa/verify/route.ts`, `SECURITY.md` (klaim lama) | Tambah kolom hash backup code + konsumsi sekali pakai; `SECURITY.md` sudah dikoreksi pada audit ini |
 | **F-11** | Rendah | Pending secret 2FA disimpan di `Map` in-memory (TTL 5 menit) | `src/lib/two-factor.ts` | Multi-instance tanpa sticky session: pindahkan ke Redis (pola `rate-limit-store.ts`) |
 | **F-12** | Rendah | `POST /api/auth/register` membocorkan keberadaan email (`409 "Email sudah terdaftar."`), padahal `forgot-password` sengaja anti-enumeration | `src/app/api/auth/register/route.ts` | Bila ingin tertutup: balas 201/200 + kirim email "email sudah terdaftar" (butuh SMTP) |
 | **F-13** | Rendah | `/api/health` publik mengembalikan `version`, `environment`, `uptime`, dan RSS (di field `latencyMs`) | `src/app/api/health/route.ts` | Hapus `version`/`environment` (atau batasi ke jaringan internal); gunakan `rssMb` alih-alih menaruh byte di `latencyMs` |
@@ -162,7 +175,7 @@ Prefix hilang karena `cookies` dikonfigurasi manual di `authOptions`. Sekarang `
 - **Autentikasi:** NextAuth v4 kredensial + OAuth opsional; `resolveSecret()` melempar error di produksi bila `NEXTAUTH_SECRET` hilang/<16 char; lockout 5 gagal/15 menit (Redis/in-memory) dengan kunci `email+IP`; `getClientIp()` hanya mempercayai header edge atau entri XFF dari kanan sejumlah `TRUSTED_PROXY_HOPS`; Caddy menimpa `X-Forwarded-For` dengan IP soket → spoofing header tidak bisa melewati rate limit/lockout.
 - **Otorisasi:** `src/lib/session.ts` (`requireUser`/`requireAdmin`) dipakai di semua route yang butuh; 5/5 file `src/app/api/admin/**` memanggil `requireAdmin`; proxy memblokir `/admin*` untuk non-admin pada Edge (JWT), `/admin` juga `noindex`; admin tidak bisa menurunkan role sendiri.
 - **Rate limit & audit:** tier `auth` 20 / `search` 30 / `read` 60 / `expensive` 10 per menit per IP, respons 429 + `Retry-After` + header `X-RateLimit-*`; audit log `logs/audit.jsonl` (rotasi 10 MB, dilewati di serverless) dengan IP di-HMAC-SHA256 memakai `IP_HASH_SALT`.
-- **2FA:** TOTP `otplib` (±1 langkah), secret terenkripsi AES-256-GCM (`iv:authTag:ciphertext`), `/enable` mewajibkan pending secret + kode valid, `/disable` mewajibkan password, dekripsi gagal → fail closed; akun ber-2FA tidak bisa masuk lewat OAuth (F-19).
+- **2FA:** TOTP `otplib` (±1 langkah), secret terenkripsi AES-256-GCM (`iv:authTag:ciphertext`), `/enable` mewajibkan pending secret + kode valid, `/disable` mewajibkan password, dekripsi gagal → fail closed; akun ber-2FA tidak bisa masuk lewat OAuth (F-19); **kode cadangan sekali pakai** disimpan sebagai hash bcrypt di `TwoFactorBackupCode` (F-10) dan bisa dipakai login sebagai pengganti TOTP, tetap di dalam lockout login.
 - **Penautan akun OAuth (setelah F-07/F-19):** tanpa adapter NextAuth (flag *dangerous* dihapus & dikomentari), callback `signIn` sendiri yang mengatur: hanya `account.type === 'oauth'`, email wajib terverifikasi provider (Google `email_verified`, GitHub `/user/emails` dengan `verified:true`, fail closed untuk provider asing/error), akun ber-2FA ditolak, dan kegagalan DB → tolak (kecuali `P2002` balapan create).
 - **Sesi (setelah F-06/F-09/F-18):** cookie `httpOnly` + `SameSite=Lax` + `Secure` + prefix `__Secure-`/`__Host-`; nama cookie terpusat di `src/lib/auth-cookies.ts` sehingga penulis (NextAuth) & pembaca (`getToken`) tidak bisa berbeda lagi; klaim JWT memuat `id`/`role`/`sv`; `User.sessionVersion` divalidasi ulang ke DB (default ≤60 detik, `SESSION_REVALIDATE_SECONDS`) dan dinaikkan saat reset password, perubahan role, dan penonaktifan 2FA; guard server-side (`src/lib/session.ts`) fail closed untuk sesi yang dicabut; `/admin` dijaga 3 lapis (proxy Edge → `admin/layout.tsx` yang DB-validated → `requireAdmin()` di tiap API).
 - **DB & infra:** port DB/Redis/web hanya `127.0.0.1`; `POSTGRES_PASSWORD` wajib; container app berjalan sebagai `nextjs` (uid 1001, non-root); HEALTHCHECK; log container dibatasi (`max-size`/`max-file`); backup harian 02:00 retensi 14 hari.
@@ -172,14 +185,13 @@ Prefix hilang karena `cookies` dikonfigurasi manual di `authOptions`. Sekarang `
 
 ## 4. Rekomendasi lanjutan (urut prioritas)
 
-1. Simpan *backup code* 2FA (F-10) supaya pengguna punya jalur pemulihan — sekaligus penting sejak F-19 membuat akun ber-2FA wajib memakai password + kode (tanpa backup code, authenticator hilang = akun terkunci).
-2. Least privilege DB (F-16) dan pisahkan role migrasi.
-3. Validasi URL media admin (F-14) dengan `sanitizeUrl()`.
-4. Verifikasi host key SSH di pipeline (F-15).
-5. Persist pending secret 2FA ke Redis (F-11) bila di-deploy multi-instance.
-6. Turunkan informasi pada `/api/health` (F-13) dan pertimbangkan anti-enumeration di register (F-12).
-7. Samakan batas panjang password dengan batas bcrypt 72 byte (F-17).
-8. Operasional sesi: pertimbangkan `SESSION_REVALIDATE_SECONDS=0` pada situs berisiko tinggi, dan pantau lonjakan query akibat validasi (1 lookup PK per request setelah jendela habis). Bila jumlah request ber-sesi tinggi, tambahkan cache in-process berkunci `id:sv` agar validasi tidak menembak DB setiap request.
+1. Least privilege DB (F-16) dan pisahkan role migrasi.
+2. Validasi URL media admin (F-14) dengan `sanitizeUrl()`.
+3. Verifikasi host key SSH di pipeline (F-15).
+4. Persist pending secret 2FA ke Redis (F-11) bila di-deploy multi-instance.
+5. Turunkan informasi pada `/api/health` (F-13) dan pertimbangkan anti-enumeration di register (F-12).
+6. Samakan batas panjang password dengan batas bcrypt 72 byte (F-17).
+7. Operasional sesi: pertimbangkan `SESSION_REVALIDATE_SECONDS=0` pada situs berisiko tinggi, dan pantau lonjakan query akibat validasi (1 lookup PK per request setelah jendela habis). Bila jumlah request ber-sesi tinggi, tambahkan cache in-process berkunci `id:sv` agar validasi tidak menembak DB setiap request.
 
 > Catatan migrasi: deploy **wajib** menjalankan `prisma migrate deploy` (service `migrate`
 > di `docker-compose.prod.yml`, atau `bun run db:migrate:prod`) sebelum versi baru menerima
@@ -191,7 +203,7 @@ Prefix hilang karena `cookies` dikonfigurasi manual di `authOptions`. Sekarang `
 npm ci && npx prisma generate          # CI resmi
 npm audit --omit=dev                   # wajib 0 vulnerability (dipakai CI)
 npx tsc --noEmit && npx eslint .
-npx vitest run                         # 358 test, termasuk 63 regresi audit ini
+npx vitest run                         # 396 test, termasuk 101 regresi audit ini
 # uji manual cepat (dev):
 #   1. Tanpa SMTP + NODE_ENV=production → POST /api/auth/send-verification
 #      tidak boleh memuat devUrl, dan log tidak memuat ?token=
@@ -207,6 +219,10 @@ npx vitest run                         # 358 test, termasuk 63 regresi audit ini
 #      yang 2FA-nya aktif → harus ditolak (?error=UsePasswordLogin); akun tanpa
 #      2FA dengan email sama boleh masuk; akun dengan email belum terverifikasi
 #      di provider → ditolak (?error=OAuthEmailNotVerified)
+#   7. Kode cadangan (F-10): aktifkan 2FA → catat kode → login pakai kode itu di
+#      kolom kode 2FA (harus berhasil), login lagi dengan kode yang sama (harus
+#      gagal); /auth/2fa harus menampilkan sisa kode berkurang; "Buat ulang kode
+#      cadangan" (butuh password) harus membatalkan kode lama
 ```
 
 > Catatan lingkungan: pada sandbox audit ini `prisma generate` tidak dapat mengunduh engine (hanya `registry.npmjs.org` yang diizinkan), sehingga suite `src/lib/auth.test.ts` tidak dapat dijalankan; seluruh suite lain lulus.

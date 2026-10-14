@@ -10,6 +10,7 @@ import {
   getPendingSecret,
   clearPendingSecret,
 } from '@/lib/two-factor';
+import { saveBackupCodes } from '@/lib/two-factor-backup';
 
 /**
  * POST /api/auth/2fa/enable
@@ -19,9 +20,11 @@ import {
  *   2. Verifies the user-supplied 6-digit TOTP token against that secret.
  *   3. If valid: encrypts the secret, persists to user.twoFactorSecret + sets
  *      user.twoFactorEnabled = true.
- *   4. Generates 8 single-use backup codes (shown once to the user).
+ *   4. Generates 8 single-use backup codes, menyimpan **hash bcrypt**-nya
+ *      (F-10), lalu mengembalikan kode plaintext SEKALI ke pemilik akun.
  *   5. Returns { enabled: true, backupCodes } so the frontend can render the
- *      one-time backup-code display.
+ *      one-time backup-code display. Kode bisa dipakai login (menggantikan
+ *      TOTP) lewat kolom kode yang sama di halaman login.
  *
  * Body: { token: string }
  *
@@ -131,6 +134,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Generate 8 backup codes (ditampilkan SEKALI) dan simpan hash-nya lebih
+    // dulu: kode ini satu-satunya jalur pemulihan bila authenticator hilang,
+    // jadi 2FA tidak boleh aktif tanpa kode yang benar-benar tersimpan
+    // (F-10 — sebelumnya kode hanya dikirim ke klien lalu hilang).
+    const backupCodes = generateBackupCodes(8);
+    try {
+      await saveBackupCodes(userId, backupCodes);
+    } catch (saveErr) {
+      logger.error('[2fa/enable] gagal menyimpan kode cadangan:', {
+        error: saveErr instanceof Error ? saveErr.message : String(saveErr),
+      });
+      return NextResponse.json(
+        { error: 'Gagal menyimpan kode cadangan. Coba lagi.' },
+        { status: 500 }
+      );
+    }
+
     await db.user.update({
       where: { id: userId },
       data: {
@@ -141,9 +161,6 @@ export async function POST(req: NextRequest) {
 
     // Clear the pending secret — it's now persisted
     clearPendingSecret(userId);
-
-    // Generate 8 backup codes (shown ONCE to the user)
-    const backupCodes = generateBackupCodes(8);
 
     if (process.env.NODE_ENV !== 'production') {
       logger.info(`[2fa/enable] 2FA enabled for user ${userId}`);

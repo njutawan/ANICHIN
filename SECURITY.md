@@ -163,10 +163,12 @@ terpusat (Zod).
 > `src/lib/auth.ts` (`authorize()`), di dalam alur login yang sudah dilindungi
 > lockout. Endpoint `POST /api/auth/2fa/verify` sengaja **tidak** memverifikasi
 > kode — ia hanya melaporkan apakah akun memerlukan langkah 2FA (dipakai form
-> login). *Backup code* saat ini **belum** bisa dipakai untuk login: kodenya
-> ditampilkan sekali saat aktivasi, tetapi skema database belum menyimpannya
-> (belum ada kolomnya) sehingga hanya TOTP yang diverifikasi — jangan
-> mengandalkannya sebagai jalur pemulihan.
+> login). **Kode cadangan bisa dipakai login** sebagai pengganti TOTP: yang
+> disimpan di database hanya hash bcrypt-nya (tabel `TwoFactorBackupCode`), tiap
+> kode sekali pakai, input diterima di kolom kode 2FA pada halaman login
+> (format `XXXXX-XXXXX`). Kode baru bisa dibuat kapan saja dari `/auth/2fa`
+> dengan memasukkan password — membuat kode baru otomatis membatalkan semua kode
+> lama.
 
 ## Menjaga kerahasiaan
 

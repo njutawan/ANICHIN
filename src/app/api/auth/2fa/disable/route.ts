@@ -5,6 +5,7 @@ import { checkRateLimit, addRateLimitHeaders } from '@/lib/rate-limit';
 import { db } from '@/lib/db';
 import { compareSync } from 'bcryptjs';
 import { clearPendingSecret } from '@/lib/two-factor';
+import { clearBackupCodes } from '@/lib/two-factor-backup';
 
 /**
  * POST /api/auth/2fa/disable
@@ -16,7 +17,8 @@ import { clearPendingSecret } from '@/lib/two-factor';
  * Body: { password: string }
  *
  * On success: clears user.twoFactorSecret + sets user.twoFactorEnabled = false,
- * and also drops any pending setup secret for that user.
+ * deletes the stored backup codes (F-10), and also drops any pending setup
+ * secret for that user.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -107,6 +109,11 @@ export async function POST(req: NextRequest) {
         sessionVersion: { increment: 1 },
       },
     });
+
+    // Kode cadangan ikut dihapus: 2FA sudah mati, kode itu tidak boleh
+    // tertinggal di database sebagai kredensial yang bisa dipakai bila 2FA
+    // dinyalakan lagi dengan secret berbeda.
+    await clearBackupCodes(userId);
 
     // Also clear any stale pending secret (e.g. user started setup, then
     // decided to disable instead)

@@ -31,7 +31,8 @@ type PageState =
   | 'enabled'
   | 'setup' // showing QR + 6-digit input
   | 'backup-codes' // success — showing backup codes
-  | 'disable-form'; // password re-entry to disable
+  | 'disable-form' // password re-entry to disable
+  | 'regen-form'; // password re-entry to regenerate backup codes
 
 interface SetupData {
   secret: string;
@@ -47,6 +48,9 @@ export default function TwoFactorPage() {
   const [token, setToken] = useState('');
   const [password, setPassword] = useState('');
   const [backupCodes, setBackupCodes] = useState<string[]>([]);
+  // Jumlah kode cadangan yang masih bisa dipakai (F-10) — ditampilkan supaya
+  // pengguna tahu kapan harus membuat ulang tanpa menebak.
+  const [backupCodesRemaining, setBackupCodesRemaining] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [copiedSecret, setCopiedSecret] = useState(false);
   const [copiedCodes, setCopiedCodes] = useState(false);
@@ -64,7 +68,11 @@ export default function TwoFactorPage() {
         return;
       }
       if (!res.ok) throw new Error('status fetch failed');
-      const data = (await res.json()) as { enabled?: boolean };
+      const data = (await res.json()) as {
+        enabled?: boolean;
+        backupCodesRemaining?: number;
+      };
+      setBackupCodesRemaining(data.backupCodesRemaining ?? 0);
       setState(data.enabled ? 'enabled' : 'disabled');
     } catch {
       toast.error('Gagal mengambil status 2FA');
@@ -123,6 +131,7 @@ export default function TwoFactorPage() {
         return;
       }
       setBackupCodes(data.backupCodes ?? []);
+      setBackupCodesRemaining((data.backupCodes ?? []).length);
       setSetupData(null);
       setToken('');
       setState('backup-codes');
@@ -162,6 +171,41 @@ export default function TwoFactorPage() {
       // tertinggal di halaman dengan sesi mati.
       await signOut({ redirect: false });
       router.push('/auth/login?callbackUrl=/auth/2fa');
+    } catch {
+      toast.error('Gagal terhubung ke server');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ----- Regenerate backup codes (password re-entry) -----
+  //
+  // Kode cadangan adalah satu-satunya jalur masuk bila authenticator hilang,
+  // jadi pembuatannya butuh password — sesi yang dicuri saja tidak cukup untuk
+  // menerbitkan kredensial pemulihan baru (F-10).
+  const handleRegenerate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!password) {
+      toast.error('Password wajib diisi');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch('/api/auth/2fa/backup-codes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || 'Gagal membuat kode cadangan baru');
+        return;
+      }
+      setBackupCodes(data.backupCodes ?? []);
+      setBackupCodesRemaining(data.count ?? (data.backupCodes ?? []).length);
+      setPassword('');
+      setState('backup-codes');
+      toast.success('Kode cadangan baru dibuat — kode lama sudah tidak berlaku');
     } catch {
       toast.error('Gagal terhubung ke server');
     } finally {
@@ -409,8 +453,9 @@ export default function TwoFactorPage() {
                 Kode Cadangan
               </CardTitle>
               <CardDescription>
-                Simpan kode-kode ini di tempat aman. Tiap kode hanya bisa
-                dipakai sekali kalau kamu kehilangan akses ke authenticator.
+                Simpan kode-kode ini di tempat aman. Tiap kode bisa dipakai
+                sekali sebagai pengganti kode authenticator saat login, kalau
+                kamu kehilangan akses ke authenticator.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -418,9 +463,10 @@ export default function TwoFactorPage() {
                 <AlertTriangle className="h-4 w-4" />
                 <AlertTitle>Penting!</AlertTitle>
                 <AlertDescription>
-                  Kode hanya ditampilkan sekali ini. Kalau hilang, kamu tidak
-                  bisa login kalau authenticator hilang. Salin atau catat
-                  sekarang.
+                  Kode hanya ditampilkan sekali ini — di server hanya hash-nya
+                  yang disimpan, jadi kode yang sudah hilang tidak bisa
+                  ditampilkan lagi (buat ulang dari halaman ini bila perlu).
+                  Salin atau catat sekarang.
                 </AlertDescription>
               </Alert>
 
@@ -459,7 +505,11 @@ export default function TwoFactorPage() {
               </Button>
 
               <Button
-                onClick={() => setState('enabled')}
+                onClick={() => {
+                  setState('enabled');
+                  // Ambil ulang status supaya hitungan sisa kode cadangan akurat.
+                  fetchStatus();
+                }}
                 className="w-full bg-brand text-brand-foreground hover:bg-brand/90"
               >
                 <Check className="h-4 w-4" /> Sudah simpan, selesai
@@ -495,6 +545,38 @@ export default function TwoFactorPage() {
                   aman. Jangan nonaktifkan 2FA kecuali benar-benar perlu.
                 </AlertDescription>
               </Alert>
+
+              {/* Sisa kode cadangan (F-10) */}
+              <div className="flex items-center justify-between rounded-md border border-border/60 bg-secondary/40 px-3 py-2">
+                <div className="flex items-center gap-2 text-sm">
+                  <KeyRound className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-muted-foreground">Kode cadangan tersisa</span>
+                </div>
+                <Badge
+                  variant={backupCodesRemaining > 0 ? 'secondary' : 'destructive'}
+                >
+                  {backupCodesRemaining}
+                </Badge>
+              </div>
+
+              {backupCodesRemaining === 0 && (
+                <Alert variant="destructive">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>Tidak ada kode cadangan</AlertTitle>
+                  <AlertDescription>
+                    Kalau authenticator hilang sekarang, kamu tidak punya jalur
+                    masuk. Buat kode cadangan baru (butuh password).
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              <Button
+                variant="outline"
+                onClick={() => setState('regen-form')}
+                className="w-full"
+              >
+                <RefreshCw className="h-4 w-4" /> Buat ulang kode cadangan
+              </Button>
               <Button
                 variant="outline"
                 onClick={() => setState('disable-form')}
@@ -581,6 +663,81 @@ export default function TwoFactorPage() {
                     ) : (
                       <>
                         <Shield className="h-4 w-4" /> Nonaktifkan
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* REGEN FORM state — password re-entry untuk kode cadangan baru */}
+        {state === 'regen-form' && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <RefreshCw className="h-5 w-5 text-brand" />
+                Buat Ulang Kode Cadangan
+              </CardTitle>
+              <CardDescription>
+                Masukkan password untuk membuat 8 kode cadangan baru. Semua kode
+                lama langsung tidak berlaku.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <form onSubmit={handleRegenerate} className="space-y-3">
+                <div className="relative">
+                  <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="Password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="pl-9 pr-10"
+                    autoComplete="current-password"
+                    autoFocus
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((s) => !s)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    tabIndex={-1}
+                    aria-label={showPassword ? 'Sembunyikan password' : 'Tampilkan password'}
+                  >
+                    {showPassword ? (
+                      <EyeOff className="h-4 w-4" />
+                    ) : (
+                      <Eye className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setPassword('');
+                      setState('enabled');
+                    }}
+                    className="flex-1"
+                    disabled={submitting}
+                  >
+                    Batal
+                  </Button>
+                  <Button
+                    type="submit"
+                    className="flex-1 bg-brand text-brand-foreground hover:bg-brand/90"
+                    disabled={submitting || !password}
+                  >
+                    {submitting ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" /> Memproses…
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="h-4 w-4" /> Buat ulang
                       </>
                     )}
                   </Button>

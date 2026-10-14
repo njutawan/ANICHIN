@@ -24,7 +24,9 @@ import {
 import {
   verifyTwoFactorToken,
   decryptSecret,
+  isBackupCode,
 } from '@/lib/two-factor';
+import { consumeBackupCode } from '@/lib/two-factor-backup';
 
 /**
  * Auth optimization (Round 18 + Round 21):
@@ -312,20 +314,55 @@ function buildProviders() {
         // penyerang bisa memvalidasi kode di luar lockout). Halaman login
         // memakai endpoint itu hanya untuk tahu kapan harus menampilkan input
         // kode 2FA.
-        if (user.twoFactorEnabled && user.twoFactorSecret) {
-          if (!totp || totp.length !== 6) {
+        // Dua jenis faktor diterima di sini:
+        //   1. kode TOTP 6 digit dari authenticator app,
+        //   2. kode cadangan `XXXXX-XXXXX` — sekali pakai, untuk pengguna yang
+        //      kehilangan authenticator (F-10: kode kini benar-benar disimpan
+        //      sebagai hash bcrypt, lihat src/lib/two-factor-backup.ts).
+        // Keduanya diverifikasi di jalur INI saja (di dalam lockout + dicatat
+        // sebagai kegagalan), jadi tidak ada cara memvalidasi kode di luar alur
+        // login. Akun dengan `twoFactorEnabled` tapi tanpa secret tetap
+        // diwajibkan faktor kedua (fail closed), tidak lagi dilewatkan.
+        if (user.twoFactorEnabled) {
+          if (!totp) {
             // Sinyal ke klien: bukan salah password, tetapi butuh langkah 2FA.
             throw new Error('2FA_REQUIRED');
           }
-          try {
-            const secret = decryptSecret(user.twoFactorSecret);
-            const valid = verifyTwoFactorToken(totp, secret);
-            if (!valid) {
-              await recordFailedAttempt(email, ip);
-              return null;
+
+          let secondFactorOk = false;
+
+          // (1) TOTP — hanya bila bentuknya 6 digit dan secretnya tersedia.
+          if (/^\d{6}$/.test(totp) && user.twoFactorSecret) {
+            try {
+              secondFactorOk = verifyTwoFactorToken(
+                totp,
+                decryptSecret(user.twoFactorSecret)
+              );
+            } catch {
+              // Dekripsi gagal (key salah / data rusak) → anggap gagal.
+              secondFactorOk = false;
             }
-          } catch {
-            // Decryption failed — treat as failed auth
+          }
+
+          // (2) Kode cadangan sekali pakai (dikonsumsi secara atomik di DB).
+          if (!secondFactorOk && isBackupCode(totp)) {
+            try {
+              secondFactorOk = await consumeBackupCode(user.id, totp);
+              if (secondFactorOk) {
+                logger.warn('[auth] login memakai kode cadangan 2FA', {
+                  userId: user.id,
+                });
+              }
+            } catch (err) {
+              // DB bermasalah saat mengonsumsi kode → fail closed.
+              logger.error('[auth] gagal mengonsumsi kode cadangan 2FA:', {
+                error: err instanceof Error ? err.message : String(err),
+              });
+              secondFactorOk = false;
+            }
+          }
+
+          if (!secondFactorOk) {
             await recordFailedAttempt(email, ip);
             return null;
           }

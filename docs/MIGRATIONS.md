@@ -14,9 +14,17 @@ prisma/migrations/
 │   └── migration.sql                                      # 15 tabel + 53 index + 14 FK
 ├── 20261002000000_add_perf_indexes/
 │   └── migration.sql
-└── 20261015120000_add_session_version/
-    └── migration.sql                                      # User.sessionVersion (pencabutan sesi)
+├── 20261015120000_add_session_version/
+│   └── migration.sql                                      # User.sessionVersion (pencabutan sesi)
+└── 20261015140000_add_2fa_backup_codes/
+    └── migration.sql                                      # tabel TwoFactorBackupCode (kode cadangan 2FA)
 ```
+
+> **Migrasi `add_2fa_backup_codes` bersifat additive** (tabel baru + FK + index,
+> tanpa perintah destruktif) dan tidak butuh backfill: kode cadangan lama memang
+> tidak pernah tersimpan, jadi tidak ada data untuk dipindahkan. Pengguna yang
+> sudah mengaktifkan 2FA cukup menekan *"Buat ulang kode cadangan"* di
+> `/auth/2fa` setelah deploy supaya kode pemulihannya benar-benar tersimpan.
 
 > **Migrasi `add_session_version` WAJIB jalan sebelum kode baru melayani
 > request.** Kode membaca `User.sessionVersion` (kolom baru) di jalur login dan
