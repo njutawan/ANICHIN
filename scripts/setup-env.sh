@@ -32,7 +32,7 @@ elif [[ ! "$DATABASE_URL" =~ ^postgresql ]]; then
   export DATABASE_URL="postgresql://anichin:anichin@localhost:5432/anichin?schema=public"
 fi
 
-echo -e "${GREEN}  DATABASE_URL=${DATABASE_URL}${NC}"
+echo -e "${GREEN}  DATABASE_URL configured (credentials redacted)${NC}"
 
 # 2. Verify Prisma schema exists
 if [ ! -f "${PWD}/prisma/schema.prisma" ]; then

@@ -94,7 +94,8 @@ async function main() {
     ? envContent.replace(/^DATABASE_URL=.*$/m, `DATABASE_URL="${DATABASE_URL}"`)
     : `${envContent}\nDATABASE_URL="${DATABASE_URL}"\n`;
   fs.writeFileSync(envPath, updated);
-  console.log(`  ✅ DATABASE_URL=${DATABASE_URL}`);
+  fs.chmodSync(envPath, 0o600);
+  console.log('  ✅ DATABASE_URL configured (credentials redacted)');
 
   console.log('\n🔧 5/6 Prisma generate + migrate deploy...');
   run('bunx prisma generate');

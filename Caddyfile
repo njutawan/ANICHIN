@@ -15,8 +15,13 @@
 {$SITE_DOMAIN} {
 	# ── Security: Remove server fingerprinting ───────────────
 	header {
-		# Hide Caddy server header
+		# Hide Caddy server header and remove any CORS headers from upstream.
 		-Server
+		-Access-Control-Allow-Origin
+		-Access-Control-Allow-Methods
+		-Access-Control-Allow-Headers
+		-Access-Control-Allow-Credentials
+		-Access-Control-Max-Age
 
 		# Security headers (defense-in-depth with Next.js middleware)
 		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
@@ -34,21 +39,21 @@
 		/_next/static/* Cache-Control "public, max-age=31536000, immutable"
 	}
 
-	# ── CORS: Restrict to same-origin ────────────────────────
-	# API routes don't need cross-origin access from browsers
+	# APIs are same-origin only: do not emit Access-Control-Allow-Origin: null
+	# (or any permissive CORS headers). The Next.js proxy rejects cross-origin
+	# mutation requests by Origin / Fetch Metadata.
 	@api {
 		path /api/*
 	}
 	handle @api {
-		header Access-Control-Allow-Origin "null"
-		header Access-Control-Allow-Methods "GET, POST, OPTIONS"
-		header Access-Control-Allow-Headers "Content-Type, Authorization"
-		header Access-Control-Max-Age "86400"
 		reverse_proxy web:3000 {
 			header_up Host {host}
-			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-For {client_ip}
 			header_up X-Forwarded-Proto {scheme}
-			header_up X-Real-IP {remote_host}
+			header_up X-Real-IP {client_ip}
+			header_up -X-Vercel-Forwarded-For
+			header_up -CF-Connecting-IP
+			header_up -True-Client-IP
 		}
 	}
 
@@ -56,9 +61,12 @@
 	handle {
 		reverse_proxy web:3000 {
 			header_up Host {host}
-			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-For {client_ip}
 			header_up X-Forwarded-Proto {scheme}
-			header_up X-Real-IP {remote_host}
+			header_up X-Real-IP {client_ip}
+			header_up -X-Vercel-Forwarded-For
+			header_up -CF-Connecting-IP
+			header_up -True-Client-IP
 		}
 	}
 
@@ -84,9 +92,10 @@
 	# ── Catatan X-Forwarded-For (JANGAN dihapus tanpa alasan) ─
 	# Caddy 2.7+ mengabaikan X-Forwarded-* kiriman klien bila sumbernya bukan
 	# proxy yang dipercaya (default: tidak ada yang dipercaya), dan blok
-	# `header_up X-Forwarded-For {remote_host}` di atas MENIMPA (bukan
-	# menambahkan) header itu dengan IP socket asli. Hasilnya rate limit,
-	# login lockout, dan audit log aplikasi tidak bisa dipalsukan klien.
+	# `header_up X-Forwarded-For {client_ip}` di atas MENIMPA (bukan
+	# menambahkan) header itu dengan IP yang sudah divalidasi Caddy (default-nya
+	# peer TCP; hanya memakai IP klien di belakang CIDR proxy yang dipercaya).
+	# Hasilnya rate limit, login lockout, dan audit log tidak dapat dipalsukan.
 	# Kalau situs nanti diletakkan di belakang CDN/LB (Cloudflare dll), aktifkan
 	# blok GLOBAL berikut di PALING ATAS file ini dan isi hanya CIDR proxy
 	# tersebut — JANGAN pakai `private_ranges` (trafik dari internet masuk ke

@@ -6,7 +6,7 @@
  * store is shared across the test process, so each test uses a unique client IP
  * and calls resetRateLimit in beforeEach to guarantee isolation.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest, NextResponse } from 'next/server';
 import { checkRateLimit, addRateLimitHeaders } from '@/lib/rate-limit';
 import { resetRateLimit } from '@/lib/rate-limit-store';
@@ -30,9 +30,15 @@ describe('checkRateLimit', () => {
   let req: NextRequest;
 
   beforeEach(async () => {
+    // Unit requests use a synthetic XFF value, so explicitly model one trusted ingress hop.
+    vi.stubEnv('TRUSTED_PROXY_HOPS', '1');
     ip = uniqueIp();
     req = makeReq(ip);
     await resetRateLimit(`${ip}:read`);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it('allows requests under limit', async () => {

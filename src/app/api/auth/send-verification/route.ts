@@ -1,6 +1,6 @@
-import { logger } from "@/lib/logger";
+import { logger } from '@/lib/logger';
 import { NextRequest, NextResponse } from 'next/server';
-import { requireUser } from '@/lib/session';
+import { isValidEmail } from '@/lib/auth';
 import { checkRateLimit, addRateLimitHeaders } from '@/lib/rate-limit';
 import { db } from '@/lib/db';
 import { createVerificationToken, sendVerificationEmail } from '@/lib/email';
@@ -8,117 +8,65 @@ import { createVerificationToken, sendVerificationEmail } from '@/lib/email';
 /**
  * POST /api/auth/send-verification
  *
- * Generates a fresh email-verification token for the authenticated user and
- * "sends" the verification email (in dev: logged to console + URL returned so
- * the test harness can hit it; in prod: would call SMTP — currently logs only).
- *
- * Behavior:
- *  - Requires authenticated user.
- *  - If user.emailVerified is already set → { alreadyVerified: true } (200).
- *  - Otherwise: create token, build URL, send email, return { sent: true }.
- *  - In dev / no-SMTP mode, also returns `devUrl` so QA can click through.
- *  - Sanitization: doesn't leak the user's email in the response beyond a
- *    generic confirmation. The token is NEVER returned to the client.
- *
- * Rate limit: auth tier (20 req/60s per IP — generous enough to allow the
- * "resend" button + banner click without tripping, but blocks scripted abuse).
- *
- * Response:
- *   200 { alreadyVerified: true }
- *   200 { sent: true, devUrl?: string }
- *   401 { error: 'Login dulu buat akses fitur ini.' }
- *   429 { error, retryAfter }
- *   500 { error: 'Gagal mengirim email verifikasi. Coba lagi.' }
+ * Public, anti-enumeration resend endpoint: users cannot log in before proving
+ * mailbox ownership, so the verification link must be requestable without a
+ * session. Unknown/already-verified addresses receive the same HTTP response.
  */
 export async function POST(req: NextRequest) {
   try {
-    // Auth tier rate limit (20 req/60s per IP). Prevents spam but allows
-    // legitimate resend flows.
+    const contentLength = Number(req.headers.get('content-length') ?? 0);
+    if (contentLength > 4096) {
+      return NextResponse.json({ error: 'Payload terlalu besar.' }, { status: 413 });
+    }
+
     const limited = await checkRateLimit(req, 'auth');
     if (limited) return limited;
 
-    const [session, err] = await requireUser(req);
-    if (err) return err;
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: 'Format request tidak valid.' }, { status: 400 });
+    }
 
-    const userId = session!.user.id;
+    const email = (body as { email?: unknown } | null)?.email;
+    if (typeof email !== 'string' || !isValidEmail(email.trim().toLowerCase())) {
+      return NextResponse.json({ error: 'Format email tidak valid.' }, { status: 400 });
+    }
 
-    // Fetch current verification state.
+    const normalizedEmail = email.trim().toLowerCase();
     const user = await db.user.findUnique({
-      where: { id: userId },
-      select: { email: true, emailVerified: true, name: true },
+      where: { email: normalizedEmail },
+      select: { id: true, email: true, emailVerified: true },
     });
 
-    if (!user) {
-      // Defensive: session claims a user that doesn't exist. Don't leak.
-      return NextResponse.json(
-        { error: 'Akun tidak ditemukan.' },
-        { status: 404 }
-      );
+    let devUrl: string | undefined;
+    if (user && !user.emailVerified) {
+      try {
+        const { token } = await createVerificationToken(user.id);
+        const baseUrl = new URL(process.env.NEXTAUTH_URL || 'http://localhost:3000').origin;
+        const verificationUrl = `${baseUrl}/api/auth/verify-email?token=${token}`;
+        const result = await sendVerificationEmail(user.email, verificationUrl);
+        if (!result.delivered) {
+          logger.warn('[send-verification] email delivery failed');
+        } else if (process.env.NODE_ENV !== 'production') {
+          devUrl = result.devUrl;
+        }
+      } catch (err) {
+        // Do not reveal account existence or token details to the caller.
+        logger.warn('[send-verification] failed to create/send verification email', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
-    // Already verified — short-circuit with a clean flag so the client can
-    // hide the banner.
-    if (user.emailVerified) {
-      return addRateLimitHeaders(
-        NextResponse.json(
-          { alreadyVerified: true, sent: false },
-          { status: 200 }
-        ),
-        'auth'
-      );
-    }
-
-    // Create fresh token (single active per user — old unused tokens deleted).
-    const { token } = await createVerificationToken(userId);
-
-    // Build verification URL. NEXTAUTH_URL is the canonical public base.
-    const baseUrl = process.env.NEXTAUTH_URL || '';
-    if (!baseUrl) {
-      logger.error(
-        '[send-verification] NEXTAUTH_URL not set — cannot build verification URL'
-      );
-      return NextResponse.json(
-        { error: 'Konfigurasi server tidak lengkap.' },
-        { status: 500 }
-      );
-    }
-
-    const verificationUrl = `${baseUrl.replace(/\/$/, '')}/api/auth/verify-email?token=${token}`;
-
-    // Send the email (dev: console + returns devUrl; prod: would SMTP).
-    const result = await sendVerificationEmail(user.email, verificationUrl);
-
-    if (!result.delivered) {
-      // SMTP failure (future). Don't leak the cause to the client.
-      logger.error('[send-verification] email delivery failed');
-      return NextResponse.json(
-        { error: 'Gagal mengirim email verifikasi. Coba lagi.' },
-        { status: 502 }
-      );
-    }
-
-    // Build response. `devUrl` (berisi token) HANYA untuk non-produksi.
-    //
-    // Sebelumnya respons ini ikut memuat devUrl di produksi tanpa SMTP, karena
-    // `sendVerificationEmail` selalu mengembalikan devUrl pada fallback console
-    // — artinya siapa pun yang mendaftar dengan alamat email orang lain bisa
-    // memverifikasi alamat itu tanpa akses ke inbox (token dibalas ke klien).
-    // Sekarang `deliverEmail` mengembalikan `delivered: false` + tanpa devUrl di
-    // produksi (lihat src/lib/email.ts), dan guard di bawah menjadi lapis kedua.
-    const payload: { sent: boolean; devUrl?: string } = { sent: true };
-    if (result.devUrl && process.env.NODE_ENV !== 'production') {
-      payload.devUrl = result.devUrl;
-    }
-
-    return addRateLimitHeaders(
-      NextResponse.json(payload, { status: 200 }),
-      'auth'
-    );
+    const payload: { sent: true; devUrl?: string } = { sent: true };
+    if (devUrl) payload.devUrl = devUrl;
+    return addRateLimitHeaders(NextResponse.json(payload, { status: 200 }), 'auth');
   } catch (err) {
-    logger.error('[send-verification] Unexpected error:', { error: err instanceof Error ? err.message : String(err) });
-    return NextResponse.json(
-      { error: 'Gagal mengirim email verifikasi. Coba lagi.' },
-      { status: 500 }
-    );
+    logger.error('[send-verification] Unexpected error:', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return NextResponse.json({ error: 'Gagal mengirim email verifikasi. Coba lagi.' }, { status: 500 });
   }
 }

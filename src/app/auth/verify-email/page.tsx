@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
   Mail,
@@ -24,12 +24,14 @@ import { toast } from 'sonner';
  * Manual verification fallback page. Shown when:
  *  - The auto-redirect from the email link failed (rare).
  *  - The user wants to resend the verification email.
+ *  - A new registrant needs an unauthenticated way to resend the link.
  *  - The user came here from the "Need help?" link on the banner.
  *
  * Behavior:
- *  - Loads current verification status on mount.
+ *  - Loads current verification status on mount when a session exists.
+ *  - A 401 keeps the public resend form visible (no login redirect).
  *  - If already verified → green success state.
- *  - If not verified → shows "Cek email kamu" prompt + Kirim ulang button.
+ *  - If not verified → shows an email field + resend button.
  *  - On resend: shows success toast, plus a dev toast with the devUrl in dev.
  *  - "Kembali ke beranda" link in footer.
  */
@@ -42,7 +44,6 @@ interface StatusResponse {
 
 interface SendResponse {
   sent?: boolean;
-  alreadyVerified?: boolean;
   devUrl?: string;
   error?: string;
 }
@@ -50,7 +51,6 @@ interface SendResponse {
 type PageState = 'loading' | 'verified' | 'unverified';
 
 export default function VerifyEmailPage() {
-  const router = useRouter();
   const [state, setState] = useState<PageState>('loading');
   const [email, setEmail] = useState<string>('');
   const [sending, setSending] = useState(false);
@@ -62,7 +62,8 @@ export default function VerifyEmailPage() {
         cache: 'no-store',
       });
       if (res.status === 401) {
-        router.replace('/auth/login');
+        setEmail('');
+        setState('unverified');
         return;
       }
       if (!res.ok) {
@@ -76,17 +77,25 @@ export default function VerifyEmailPage() {
       toast.error('Gagal mengambil status verifikasi.');
       setState('unverified');
     }
-  }, [router]);
+  }, []);
 
   useEffect(() => {
     fetchStatus();
   }, [fetchStatus]);
 
   const handleResend = async () => {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) {
+      toast.error('Masukkan alamat email terlebih dahulu.');
+      return;
+    }
+
     setSending(true);
     try {
       const res = await fetch('/api/auth/send-verification', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: normalizedEmail }),
       });
       const data = (await res.json()) as SendResponse;
 
@@ -95,14 +104,8 @@ export default function VerifyEmailPage() {
         return;
       }
 
-      if (data.alreadyVerified) {
-        setState('verified');
-        toast.success('Email kamu sudah terverifikasi.');
-        return;
-      }
-
       if (data.sent) {
-        toast.success('Email verifikasi telah dikirim. Cek kotak masuk kamu.');
+        toast.success('Jika email memerlukan verifikasi, link sudah dikirim. Cek kotak masuk atau folder spam.');
         if (data.devUrl) {
           // Dev mode: backend returned a usable URL — show as an actionable
           // toast so QA / dev can copy or open it.
@@ -194,9 +197,8 @@ export default function VerifyEmailPage() {
                 Cek Email Kamu
               </CardTitle>
               <CardDescription>
-                {email
-                  ? `Kami udah kirim / akan kirim link verifikasi ke ${email}. Klik link di email tersebut untuk mengaktifkan akunmu.`
-                  : 'Kirim link verifikasi ke email kamu, lalu klik link di dalam email untuk mengaktifkan akun.'}
+                Masukkan alamat email yang kamu gunakan. Jika akun memerlukan verifikasi,
+                kami akan mengirim link ke inbox tersebut.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -208,6 +210,21 @@ export default function VerifyEmailPage() {
                   “Kirim ulang” di bawah. Link verifikasi berlaku 24 jam.
                 </AlertDescription>
               </Alert>
+
+              <div className="space-y-1.5">
+                <label htmlFor="verification-email" className="text-sm font-medium">
+                  Email
+                </label>
+                <Input
+                  id="verification-email"
+                  type="email"
+                  autoComplete="email"
+                  placeholder="nama@email.com"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  required
+                />
+              </div>
 
               <div className="space-y-2 text-xs text-muted-foreground">
                 <p className="flex items-start gap-2">
@@ -226,7 +243,7 @@ export default function VerifyEmailPage() {
 
               <Button
                 onClick={handleResend}
-                disabled={sending}
+                disabled={sending || !email.trim()}
                 className="w-full bg-brand text-brand-foreground hover:bg-brand/90"
               >
                 {sending ? (
@@ -235,7 +252,7 @@ export default function VerifyEmailPage() {
                   </>
                 ) : (
                   <>
-                    <Send className="h-4 w-4" /> Kirim ulang email verifikasi
+                    <Send className="h-4 w-4" /> Kirim email verifikasi
                   </>
                 )}
               </Button>

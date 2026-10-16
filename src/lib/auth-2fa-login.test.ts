@@ -129,7 +129,17 @@ beforeEach(() => {
   dbMock.user.findUnique.mockResolvedValue(storedUser());
 });
 
-describe('authorize() — 2FA lewat kode cadangan (F-10)', () => {
+describe('authorize() — verifikasi email dan 2FA', () => {
+  it('menolak password yang benar untuk akun email-nya belum diverifikasi', async () => {
+    dbMock.user.findUnique.mockResolvedValue(
+      storedUser({ emailVerified: null, twoFactorEnabled: false })
+    );
+
+    await expect(authorize.authorize(creds(), {})).resolves.toBeNull();
+    expect(storeMock.incrFails).toHaveBeenCalled();
+    expect(storeMock.clearFails).not.toHaveBeenCalled();
+  });
+
   it('kode TOTP valid tetap bisa login', async () => {
     const token = generateSync({ secret: TOTP_SECRET });
 

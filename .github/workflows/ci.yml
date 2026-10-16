@@ -21,7 +21,7 @@ concurrency:
 
 env:
   # Shared across jobs — service container above.
-  CI_DATABASE_URL: "postgresql://anichin:anichin@localhost:5432/anichin?schema=public"
+  CI_DATABASE_URL: "postgresql://anichin:ci-postgres-runtime-password-2026-for-tests-42chars@localhost:5432/anichin?schema=public"
   CI_NEXTAUTH_SECRET: "ci-test-secret-not-for-production-32chars"
   CI_NEXTAUTH_URL: "http://localhost:3000"
 
@@ -79,7 +79,7 @@ jobs:
         image: postgres:16-alpine
         env:
           POSTGRES_USER: anichin
-          POSTGRES_PASSWORD: anichin
+          POSTGRES_PASSWORD: ci-postgres-runtime-password-2026-for-tests-42chars
           POSTGRES_DB: anichin
         ports:
           - 5432:5432
@@ -149,7 +149,7 @@ jobs:
         image: postgres:16-alpine
         env:
           POSTGRES_USER: anichin
-          POSTGRES_PASSWORD: anichin
+          POSTGRES_PASSWORD: ci-postgres-runtime-password-2026-for-tests-42chars
           POSTGRES_DB: anichin
         ports:
           - 5432:5432
@@ -200,9 +200,14 @@ jobs:
 
       - name: Smoke-test standalone server
         env:
+          NODE_ENV: production
           DATABASE_URL: ${{ env.CI_DATABASE_URL }}
           NEXTAUTH_SECRET: ${{ env.CI_NEXTAUTH_SECRET }}
-          NEXTAUTH_URL: ${{ env.CI_NEXTAUTH_URL }}
+          NEXTAUTH_URL: https://anichin.id
+          TWO_FACTOR_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          SMTP_HOST: smtp.test.invalid
+          SMTP_USER: ci-mailer@test.invalid
+          SMTP_PASS: ci-mailer-secret-for-runtime-smoke-test-2026
         run: |
           # Start the standalone server in background
           node .next/standalone/server.js &
@@ -241,11 +246,11 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # Gate nyata: sebelumnya `continue-on-error: true` membuat advisory
-      # high di dependensi produksi (mis. nodemailer) tidak pernah memblokir CI.
-      # Kalau ada advisory baru di dependensi produksi, job ini gagal.
+      # Audit seluruh graph, termasuk dependency dev. eslint-config-next saat ini
+      # sengaja tidak dipakai: chain-nya membawa braces@3.0.3 tanpa patch upstream;
+      # konfigurasi React/hooks/a11y/TypeScript tetap ada di eslint.config.mjs.
       - name: Run bun audit (blocking)
-        run: bun audit --production
+        run: bun audit
 
       - name: CodeQL security scan
         uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
@@ -271,7 +276,7 @@ jobs:
         image: postgres:16-alpine
         env:
           POSTGRES_USER: anichin
-          POSTGRES_PASSWORD: anichin
+          POSTGRES_PASSWORD: ci-postgres-runtime-password-2026-for-tests-42chars
           POSTGRES_DB: anichin
         ports:
           - 5432:5432
@@ -358,7 +363,7 @@ jobs:
         env:
           POSTGRES_DB: ci
           POSTGRES_USER: ci
-          POSTGRES_PASSWORD: ci
+          POSTGRES_PASSWORD: ci-backup-restore-password-32chars-long
         ports:
           - 5432:5432
         options: >-
@@ -368,7 +373,11 @@ jobs:
           --health-retries 20
     env:
       # Dipakai container (network host) → host runner memakai localhost.
-      SMOKE_DATABASE_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
+      SMOKE_DB_PASSWORD: ci-backup-restore-password-32chars-long
+      SMOKE_DATABASE_URL: postgresql://ci:ci-backup-restore-password-32chars-long@localhost:5432/ci?schema=public
+      SMOKE_NEXTAUTH_SECRET: 7f3a0e9c42b8d16f7a50c3e29b614d8f5e2a9c47b1d6038f4a7e5c2d9b0163af
+      SMOKE_TFA_KEY: 6a2c8e1f4d7b9035a6c1e8f247b9d05c3a6e1f8d4b7c9025a3e6d1f847b9c05a
+      SMOKE_SMTP_PASS: ci-mailer-test-credential-6a8b9c2d
       SMOKE_IMAGE: anichin:ci-${{ github.sha }}
       SMOKE_MIGRATE_IMAGE: anichin:ci-migrate-${{ github.sha }}
     steps:
@@ -376,6 +385,17 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Test private backup and disposable restore scripts
+        env:
+          PGPASSWORD: ${{ env.SMOKE_DB_PASSWORD }}
+        run: |
+          docker run --rm --network host \
+            -e PGHOST=127.0.0.1 -e PGPORT=5432 -e PGUSER=ci -e PGPASSWORD="$PGPASSWORD" \
+            -v "$PWD/scripts/test-backup-restore.sh:/tmp/test-backup-restore.sh:ro" \
+            -v "$PWD/scripts/backup-db.sh:/tmp/backup-db.sh:ro" \
+            -v "$PWD/scripts/restore-db.sh:/tmp/restore-db.sh:ro" \
+            postgres:16-alpine sh /tmp/test-backup-restore.sh /tmp/restore-db.sh /tmp/backup-db.sh
 
       - name: Cache Docker layers
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -396,7 +416,7 @@ jobs:
           tags: anichin:ci-${{ github.sha }}
           build-args: |
             DATABASE_PROVIDER=postgresql
-            DATABASE_URL=postgresql://ci:ci@localhost:5432/ci?schema=public
+            DATABASE_URL=postgresql://ci:ci-backup-restore-password-32chars-long@localhost:5432/ci?schema=public
           cache-from: type=local,src=/tmp/.docker-cache
           cache-to: type=local,dest=/tmp/.docker-cache,mode=max
 
@@ -436,9 +456,12 @@ jobs:
           docker run -d --name anichin-smoke --network host \
             -e NODE_ENV=production \
             -e DATABASE_URL="$SMOKE_DATABASE_URL" \
-            -e NEXTAUTH_URL="http://localhost:3000" \
-            -e NEXTAUTH_SECRET="ci-smoke-secret-not-for-production-32chars" \
-            -e TWO_FACTOR_ENCRYPTION_KEY="$(printf 'a%.0s' $(seq 1 64))" \
+            -e NEXTAUTH_URL="https://anichin.id" \
+            -e NEXTAUTH_SECRET="$SMOKE_NEXTAUTH_SECRET" \
+            -e TWO_FACTOR_ENCRYPTION_KEY="$SMOKE_TFA_KEY" \
+            -e SMTP_HOST="smtp.test.invalid" \
+            -e SMTP_USER="ci-mailer@test.invalid" \
+            -e SMTP_PASS="$SMOKE_SMTP_PASS" \
             "$SMOKE_IMAGE"
 
           echo "⏳ Menunggu /api/health…"

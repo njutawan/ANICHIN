@@ -148,14 +148,55 @@ describe('staging.yml — verifikasi host key SSH (audit F-15)', () => {
 describe('F-16 — kredensial role aplikasi DB ikut terkirim pipeline', () => {
   it('produksi: bootstrap .env mengirim POSTGRES_APP_PASSWORD', () => {
     expect(workflow).toContain('POSTGRES_APP_PASSWORD: ${{ secrets.POSTGRES_APP_PASSWORD }}');
-    expect(workflow).toContain('POSTGRES_APP_PASSWORD=$POSTGRES_APP_PASSWORD');
+    expect(workflow).toContain('POSTGRES_PASSWORD POSTGRES_APP_PASSWORD');
     // Skrip role ikut diunggah ke server (dipakai mount + compose-deploy.sh).
     expect(workflow).toContain('cp scripts/postgres-init/10-app-role.sh deploy-bundle/scripts/postgres-init/');
   });
 
   it('staging: bootstrap .env mengirim POSTGRES_APP_PASSWORD', () => {
     expect(staging).toContain('POSTGRES_APP_PASSWORD: ${{ secrets.STAGING_POSTGRES_APP_PASSWORD }}');
-    expect(staging).toContain('POSTGRES_APP_PASSWORD=$POSTGRES_APP_PASSWORD');
+    expect(staging).toContain('POSTGRES_PASSWORD POSTGRES_APP_PASSWORD');
     expect(staging).toContain('cp scripts/postgres-init/10-app-role.sh deploy-bundle/scripts/postgres-init/');
+  });
+});
+
+describe('deploy .env bootstrap — safe transport', () => {
+  it('production and staging base64-encode values before sending them as line records', () => {
+    for (const source of [workflow, staging]) {
+      expect(source).toContain('printf \'%s_B64=%s\\n\' "$key"');
+      expect(source).toContain('base64 -w0');
+      expect(source).toContain('send_secret "$key"');
+    }
+    expect(workflow).not.toContain('SMTP_PASS=$SMTP_PASS');
+    expect(staging).not.toContain('SMTP_PASS=$SMTP_PASS');
+  });
+});
+
+describe('deployment gates — CI must succeed before deploy', () => {
+  it('automatic production deploy follows successful same-repo push CI on main only', () => {
+    expect(workflow).toContain('workflows: ["CI"]');
+    expect(workflow).toContain('branches: [main]');
+    expect(workflow).toContain("github.event.workflow_run.conclusion == 'success'");
+    expect(workflow).toContain("github.event.workflow_run.event == 'push'");
+    expect(workflow).toContain('github.event.workflow_run.head_repository.full_name == github.repository');
+    expect(workflow).toContain("github.event.workflow_run.head_branch == 'main'");
+  });
+
+  it('automatic staging deploy only follows successful same-repo push CI on develop', () => {
+    expect(staging).toContain('workflows: ["CI"]');
+    expect(staging).toContain('branches: [develop]');
+    expect(staging).toContain("github.event.workflow_run.conclusion == 'success'");
+    expect(staging).toContain("github.event.workflow_run.event == 'push'");
+    expect(staging).toContain('github.event.workflow_run.head_repository.full_name == github.repository');
+    expect(staging).toContain("github.event.workflow_run.head_branch == 'develop'");
+  });
+
+  it('manual production and staging deploys verify CI for the exact source SHA', () => {
+    expect(workflow).toContain('head_sha=$SOURCE_SHA');
+    expect(workflow).toContain('branch=main');
+    expect(workflow).toContain('Manual deploy is allowed only from main.');
+    expect(staging).toContain('head_sha=$SOURCE_SHA');
+    expect(staging).toContain('branch=develop');
+    expect(staging).toContain('Manual staging deploy is allowed only from develop.');
   });
 });

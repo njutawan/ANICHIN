@@ -3,8 +3,8 @@
  *
  * F-12: respons untuk "email baru" dan "email sudah terdaftar" **identik**
  * (`201 { registered: true }`) supaya endpoint ini tidak bisa dipakai untuk
- * memeriksa apakah sebuah email punya akun. Notifikasi dikirim ke alamat email
- * yang bersangkutan, bukan ke pendaftar.
+ * memeriksa apakah sebuah email punya akun. Akun baru dibuat belum terverifikasi;
+ * link verifikasi dikirim ke inbox dan tidak ada sesi yang dibuat.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
@@ -12,7 +12,11 @@ import { hashSync, isValidEmail } from '@/lib/auth';
 import { checkRateLimit, addRateLimitHeaders } from '@/lib/rate-limit';
 import { logger } from '@/lib/logger';
 import { sanitizeDisplayName, PASSWORD_MAX_BYTES, isPasswordTooLong } from '@/lib/security';
-import { sendAccountExistsEmail } from '@/lib/email';
+import {
+  createVerificationToken,
+  sendAccountExistsEmail,
+  sendVerificationEmail,
+} from '@/lib/email';
 
 // Validation constants
 const NAME_MIN = 2;
@@ -36,11 +40,9 @@ function isPasswordStrongEnough(pwd: string): boolean {
 /**
  * Respons pendaftaran yang SELALU sama (F-12).
  *
- * Tidak lagi mengembalikan `{ id, email, name, createdAt }` karena objek user
- * hanya ada pada satu cabang — perbedaan bentuk itulah yang membocorkan apakah
- * email sudah terdaftar. Klien (halaman /auth/register) setelah ini mencoba
- * `signIn('credentials')`: akun baru langsung masuk, sedangkan email yang sudah
- * ada hanya bisa masuk bila passwordnya memang benar.
+ * Tidak mengembalikan identitas user maupun status pengiriman email agar respons
+ * tidak membocorkan apakah alamat sudah terdaftar. Akun baru tetap nonaktif
+ * sampai pemilik mailbox mengklik link verifikasi.
  */
 function registeredResponse(): NextResponse {
   return addRateLimitHeaders(
@@ -57,11 +59,28 @@ function registeredResponse(): NextResponse {
  * di server (tanpa token, jadi aman) dan fungsi ini tetap selesai.
  */
 async function notifyAccountExists(email: string): Promise<void> {
-  const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+  const baseUrl = new URL(process.env.NEXTAUTH_URL || 'http://localhost:3000').origin;
   try {
     await sendAccountExistsEmail(email, `${baseUrl}/auth/login`);
   } catch (err) {
     logger.warn('[register] gagal mengirim notifikasi email terdaftar', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/** Best-effort send; never expose verification tokens or account existence. */
+async function sendVerificationToUser(userId: string, email: string): Promise<void> {
+  try {
+    const { token } = await createVerificationToken(userId);
+    const baseUrl = new URL(process.env.NEXTAUTH_URL || 'http://localhost:3000').origin;
+    const verificationUrl = `${baseUrl}/api/auth/verify-email?token=${token}`;
+    const result = await sendVerificationEmail(email, verificationUrl);
+    if (!result.delivered) {
+      logger.warn('[register] verification email delivery failed');
+    }
+  } catch (err) {
+    logger.warn('[register] failed to create/send verification email', {
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -149,10 +168,15 @@ export async function POST(req: NextRequest) {
     // jalur enumerasi akun. Pemilik email yang sah diberi tahu lewat email.
     const existing = await db.user.findUnique({
       where: { email: normalizedEmail },
-      select: { id: true },
+      select: { id: true, emailVerified: true },
     });
     if (existing) {
-      await notifyAccountExists(normalizedEmail);
+      if (existing.emailVerified) {
+        await notifyAccountExists(normalizedEmail);
+      } else {
+        // Legacy/unverified accounts use the public mailbox proof flow too.
+        await sendVerificationToUser(existing.id, normalizedEmail);
+      }
       return registeredResponse();
     }
 
@@ -164,11 +188,12 @@ export async function POST(req: NextRequest) {
 
     // Create user — if email race-condition occurs, unique constraint throws.
     // Hasilnya tidak dipakai di respons (respons sengaja seragam, F-12).
-    await db.user.create({
-      data: { email: normalizedEmail, name: safeName, password: hashedPassword },
+    const created = await db.user.create({
+      data: { email: normalizedEmail, name: safeName, password: hashedPassword, emailVerified: null },
       select: { id: true },
     });
 
+    await sendVerificationToUser(created.id, normalizedEmail);
     return registeredResponse();
   } catch (err: unknown) {
     // Prisma unique constraint violation (P2002) — balapan dua pendaftaran

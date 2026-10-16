@@ -26,12 +26,70 @@
 # ============================================================================
 
 services:
+  # Reject missing, placeholder, or low-diversity production secrets before
+  # any database/service is started. The app repeats validation at runtime.
+  env-check:
+    image: alpine:3.22
+    restart: "no"
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - POSTGRES_APP_PASSWORD=${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD is required}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:?NEXTAUTH_SECRET is required}
+      - NEXTAUTH_URL=${NEXTAUTH_URL:?NEXTAUTH_URL is required}
+      - TWO_FACTOR_ENCRYPTION_KEY=${TWO_FACTOR_ENCRYPTION_KEY:?TWO_FACTOR_ENCRYPTION_KEY is required}
+      - SMTP_HOST=${SMTP_HOST:?SMTP_HOST is required for email verification}
+      - SMTP_USER=${SMTP_USER:?SMTP_USER is required for email verification}
+      - SMTP_PASS=${SMTP_PASS:?SMTP_PASS is required for email verification}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        fail() { echo "ERROR: $1" >&2; exit 1; }
+        check_secret() {
+          name="$1"; value="$2"; minimum="$3"
+          [ "${#value}" -ge "$minimum" ] || fail "$name must be at least $minimum characters"
+          lower=$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')
+          case "$lower" in
+            change-me*|replace-with*|your-*|example*|password*|secret123|*change-in-production*) fail "$name is a placeholder/weak value" ;;
+          esac
+          unique=$(printf '%s' "$value" | fold -w1 | sort -u | wc -l | tr -d ' ')
+          [ "$unique" -ge 8 ] || fail "$name has insufficient character diversity"
+        }
+        check_secret POSTGRES_PASSWORD "$POSTGRES_PASSWORD" 32
+        check_secret POSTGRES_APP_PASSWORD "$POSTGRES_APP_PASSWORD" 32
+        check_secret NEXTAUTH_SECRET "$NEXTAUTH_SECRET" 32
+        check_secret TWO_FACTOR_ENCRYPTION_KEY "$TWO_FACTOR_ENCRYPTION_KEY" 64
+        check_secret SMTP_PASS "$SMTP_PASS" 16
+        [ "$POSTGRES_PASSWORD" != "$POSTGRES_APP_PASSWORD" ] || fail "database owner and app passwords must differ"
+        case "$NEXTAUTH_URL" in https://*) ;; *) fail "NEXTAUTH_URL must use HTTPS" ;; esac
+        url_rest=${NEXTAUTH_URL#https://}
+        url_authority=${url_rest%%/*}
+        case "$url_authority" in *@*) fail "NEXTAUTH_URL must not contain credentials" ;; esac
+        case "$url_rest" in *\?*|*\#*) fail "NEXTAUTH_URL must not contain a query or fragment" ;; esac
+        url_path=${url_rest#*/}
+        [ "$url_path" = "$url_rest" ] || [ -z "$url_path" ] || fail "NEXTAUTH_URL must be an origin without a path"
+        case "$url_authority" in
+          \[*\]*) url_host=${url_authority#\[}; url_host=${url_host%%\]*} ;;
+          *:*) url_host=${url_authority%%:*} ;;
+          *) url_host=$url_authority ;;
+        esac
+        lower_host=$(printf '%s' "$url_host" | tr '[:upper:]' '[:lower:]')
+        case "$lower_host" in
+          ''|localhost|*.localhost|127.*|0.*|::|::1|::ffff:127.*|::ffff:7f??:*|::ffff:0.*|::ffff:0:0|::127.*|::7f??:*|example|example.com|example.net|example.org|*.example|*.test|*.invalid|*.example.com|*.example.net|*.example.org)
+            fail "NEXTAUTH_URL must use a real public host, not a placeholder/loopback" ;;
+        esac
+        [ "${#TWO_FACTOR_ENCRYPTION_KEY}" -eq 64 ] || fail "TWO_FACTOR_ENCRYPTION_KEY must be 64 hex characters"
+        case "$TWO_FACTOR_ENCRYPTION_KEY" in *[!0-9a-fA-F]*) fail "TWO_FACTOR_ENCRYPTION_KEY must be hexadecimal" ;; esac
+        echo "Production secret configuration validated."
+
   # ─────────────────────────────────────────────────────────────
   # db — PostgreSQL 16 with tuning for production
   # ─────────────────────────────────────────────────────────────
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    depends_on:
+      env-check:
+        condition: service_completed_successfully
     environment:
       - POSTGRES_DB=anichin
       # Role MIGRASI/owner: pemilik database, punya hak DDL. Dipakai hanya oleh
@@ -221,8 +279,9 @@ services:
     stop_grace_period: 30s
     ports:
       - "127.0.0.1:3000:3000"  # Local only — caddy handles public TLS
-    env_file:
-      - .env
+    # Do not mount all of .env here: it contains the database owner password.
+    # The web process gets only its DML-only DB URL and the runtime settings it
+    # needs (least privilege; migrations and backups retain owner credentials).
     environment:
       - NODE_ENV=production
       # F-16: aplikasi memakai role DML-only (bukan owner DB). Tanpa
@@ -232,6 +291,30 @@ services:
       - REDIS_URL=redis://redis:6379
       - NEXTAUTH_URL=${NEXTAUTH_URL:?NEXTAUTH_URL is required}
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:?NEXTAUTH_SECRET is required}
+      - TWO_FACTOR_ENCRYPTION_KEY=${TWO_FACTOR_ENCRYPTION_KEY:?TWO_FACTOR_ENCRYPTION_KEY is required}
+      - SMTP_HOST=${SMTP_HOST:?SMTP_HOST is required for email verification}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_SECURE=${SMTP_SECURE:-false}
+      - SMTP_USER=${SMTP_USER:?SMTP_USER is required for email verification}
+      - SMTP_PASS=${SMTP_PASS:?SMTP_PASS is required for email verification}
+      - "SMTP_FROM=${SMTP_FROM:-AniChin <no-reply@anichin.id>}"
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
+      - NEXT_PUBLIC_DEBUG_OAUTH=${NEXT_PUBLIC_DEBUG_OAUTH:-}
+      - NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL:-}
+      - NEXT_PUBLIC_IMAGE_HOSTS=${NEXT_PUBLIC_IMAGE_HOSTS:-}
+      - NEXT_PUBLIC_SENTRY_DSN=${NEXT_PUBLIC_SENTRY_DSN:-}
+      - NEXT_PUBLIC_SENTRY_RELEASE=${NEXT_PUBLIC_SENTRY_RELEASE:-}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_RELEASE=${SENTRY_RELEASE:-}
+      - SENTRY_DEBUG=${SENTRY_DEBUG:-false}
+      - IP_HASH_SALT=${IP_HASH_SALT:-}
+      - SESSION_REVALIDATE_SECONDS=${SESSION_REVALIDATE_SECONDS:-60}
+      - TRUSTED_PROXY_HOPS=${TRUSTED_PROXY_HOPS:-1}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - MAX_MEMORY_MB=${MAX_MEMORY_MB:-3072}
       - NEXT_TELEMETRY_DISABLED=1
       - HOSTNAME=0.0.0.0
       - PORT=3000

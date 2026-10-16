@@ -13,7 +13,9 @@
 name: Deploy Staging
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [develop]
   workflow_dispatch:
 
@@ -24,16 +26,45 @@ concurrency:
 # Token hanya butuh membaca repo (push image memakai kredensial registry).
 permissions:
   contents: read
+  actions: read
 
 jobs:
   deploy-staging:
     name: 🚀 Deploy to Staging
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Do not let a successful PR workflow_run from a fork/untrusted branch
+    # reach staging secrets or checkout; only a same-repo push to develop qualifies.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.head_branch == 'develop')
     environment:
       name: staging
     steps:
+      - name: 🛑 Verify CI success for manual staging deploy
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/develop" ]; then
+            echo "::error::Manual staging deploy is allowed only from develop."
+            exit 1
+          fi
+          successful_runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=develop&head_sha=$SOURCE_SHA&per_page=100" --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')"
+          if [ "$successful_runs" -lt 1 ]; then
+            echo "::error::No successful CI run found for $SOURCE_SHA; staging deploy is blocked."
+            exit 1
+          fi
+          echo "✓ CI succeeded for $SOURCE_SHA."
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       # `env.X` set on a step is not visible in its own `if:`, so resolve the
       # optional secrets once here and expose them as outputs.
@@ -54,6 +85,42 @@ jobs:
           if [ -z "$DEPLOY_HOST" ]; then
             echo "::warning title=Staging dilewati::STAGING_DEPLOY_HOST kosong — image tetap di-build, tetapi tidak ada server yang di-deploy."
           fi
+
+      - name: 🔍 Validate staging secrets before deploy
+        if: steps.preflight.outputs.deploy == 'true'
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.STAGING_POSTGRES_PASSWORD }}
+          POSTGRES_APP_PASSWORD: ${{ secrets.STAGING_POSTGRES_APP_PASSWORD }}
+          NEXTAUTH_SECRET: ${{ secrets.STAGING_NEXTAUTH_SECRET }}
+          NEXTAUTH_URL: ${{ secrets.STAGING_NEXTAUTH_URL }}
+          TWO_FACTOR_ENCRYPTION_KEY: ${{ secrets.STAGING_TWO_FACTOR_ENCRYPTION_KEY }}
+          SMTP_HOST: ${{ secrets.STAGING_SMTP_HOST }}
+          SMTP_USER: ${{ secrets.STAGING_SMTP_USER }}
+          SMTP_PASS: ${{ secrets.STAGING_SMTP_PASS }}
+        run: |
+          set -euo pipefail
+          check_secret() {
+            name="$1" value="$2" minimum="$3"
+            [ "${#value}" -ge "$minimum" ] || { echo "::error::$name is too short"; exit 1; }
+            lower=$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')
+            case "$lower" in
+              change-me*|replace-with*|your-*|example*|password*|secret123|*change-in-production*)
+                echo "::error::$name contains a placeholder/weak value"; exit 1 ;;
+            esac
+            unique=$(printf '%s' "$value" | fold -w1 | sort -u | wc -l | tr -d ' ')
+            [ "$unique" -ge 8 ] || { echo "::error::$name has insufficient character diversity"; exit 1; }
+          }
+          for name in POSTGRES_PASSWORD POSTGRES_APP_PASSWORD NEXTAUTH_SECRET NEXTAUTH_URL TWO_FACTOR_ENCRYPTION_KEY SMTP_HOST SMTP_USER SMTP_PASS; do
+            [ -n "${!name}" ] || { echo "::error::Missing required staging secret: $name"; exit 1; }
+          done
+          check_secret POSTGRES_PASSWORD "$POSTGRES_PASSWORD" 32
+          check_secret POSTGRES_APP_PASSWORD "$POSTGRES_APP_PASSWORD" 32
+          check_secret NEXTAUTH_SECRET "$NEXTAUTH_SECRET" 32
+          check_secret TWO_FACTOR_ENCRYPTION_KEY "$TWO_FACTOR_ENCRYPTION_KEY" 64
+          check_secret SMTP_PASS "$SMTP_PASS" 16
+          [ "$POSTGRES_PASSWORD" != "$POSTGRES_APP_PASSWORD" ] || { echo "::error::Database passwords must differ"; exit 1; }
+          [[ "$NEXTAUTH_URL" =~ ^https:// ]] || { echo "::error::NEXTAUTH_URL must use HTTPS"; exit 1; }
+          printf '%s' "$TWO_FACTOR_ENCRYPTION_KEY" | grep -qE '^[0-9a-fA-F]{64}$' || { echo "::error::TWO_FACTOR_ENCRYPTION_KEY must be 64 hex characters"; exit 1; }
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
@@ -79,12 +146,12 @@ jobs:
           # Docker lama gagal pull.
           provenance: false
           tags: |
-            ${{ secrets.REGISTRY || 'anichin' }}/anichin:staging-${{ github.sha }}
+            ${{ secrets.REGISTRY || 'anichin' }}/anichin:staging-${{ github.event.workflow_run.head_sha || github.sha }}
             ${{ secrets.REGISTRY || 'anichin' }}/anichin:staging-current
           build-args: |
             DATABASE_PROVIDER=postgresql
             NEXT_PUBLIC_SITE_URL=${{ secrets.STAGING_NEXTAUTH_URL }}
-            NEXT_PUBLIC_BUILD_ID=${{ github.sha }}
+            NEXT_PUBLIC_BUILD_ID=${{ github.event.workflow_run.head_sha || github.sha }}
           cache-from: ${{ steps.preflight.outputs.registry == 'true' && format('type=registry,ref={0}/anichin:buildcache-staging', secrets.REGISTRY) || '' }}
           cache-to: ${{ steps.preflight.outputs.registry == 'true' && format('type=registry,ref={0}/anichin:buildcache-staging,mode=max', secrets.REGISTRY) || '' }}
 
@@ -97,7 +164,7 @@ jobs:
           push: ${{ steps.preflight.outputs.registry == 'true' }}
           provenance: false
           tags: |
-            ${{ secrets.REGISTRY || 'anichin' }}/anichin:staging-migrate-${{ github.sha }}
+            ${{ secrets.REGISTRY || 'anichin' }}/anichin:staging-migrate-${{ github.event.workflow_run.head_sha || github.sha }}
             ${{ secrets.REGISTRY || 'anichin' }}/anichin:staging-migrate
           build-args: |
             DATABASE_PROVIDER=postgresql
@@ -162,7 +229,7 @@ jobs:
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -q \
             deploy-bundle/scripts/postgres-init/*.sh "$DEPLOY_USER@$DEPLOY_HOST:$APP_DIR/scripts/postgres-init/"
 
-      - name: ⚙️ Bootstrap .env staging (opsional)
+      - name: ⚙️ Bootstrap .env staging (required for deployment)
         if: steps.preflight.outputs.deploy == 'true'
         env:
           DEPLOY_HOST: ${{ secrets.STAGING_DEPLOY_HOST }}
@@ -175,6 +242,13 @@ jobs:
           POSTGRES_APP_PASSWORD: ${{ secrets.STAGING_POSTGRES_APP_PASSWORD }}
           NEXTAUTH_SECRET: ${{ secrets.STAGING_NEXTAUTH_SECRET }}
           NEXTAUTH_URL: ${{ secrets.STAGING_NEXTAUTH_URL }}
+          TWO_FACTOR_ENCRYPTION_KEY: ${{ secrets.STAGING_TWO_FACTOR_ENCRYPTION_KEY }}
+          SMTP_HOST: ${{ secrets.STAGING_SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.STAGING_SMTP_PORT }}
+          SMTP_SECURE: ${{ secrets.STAGING_SMTP_SECURE }}
+          SMTP_USER: ${{ secrets.STAGING_SMTP_USER }}
+          SMTP_PASS: ${{ secrets.STAGING_SMTP_PASS }}
+          SMTP_FROM: ${{ secrets.STAGING_SMTP_FROM }}
           ANICHIN_IMAGE: ${{ secrets.REGISTRY }}/anichin:staging-current
           ANICHIN_MIGRATE_IMAGE: ${{ secrets.REGISTRY }}/anichin:staging-migrate
         run: |
@@ -186,17 +260,24 @@ jobs:
             ANICHIN_MIGRATE_IMAGE=""
           fi
 
-          # shellcheck disable=SC2087  # ekspansi sengaja di runner (lihat deploy.yml)
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+          # Encode on the runner so secret characters/newlines cannot inject
+          # additional records into the server's line-oriented .env bootstrap.
+          send_secret() {
+            local key="$1"
+            local value="${!key}"
+            printf '%s_B64=%s\n' "$key" "$(printf '%s' "$value" | base64 -w0)"
+          }
+          {
+            for key in \
+              POSTGRES_PASSWORD POSTGRES_APP_PASSWORD NEXTAUTH_SECRET NEXTAUTH_URL \
+              TWO_FACTOR_ENCRYPTION_KEY SMTP_HOST SMTP_PORT SMTP_SECURE SMTP_USER \
+              SMTP_PASS SMTP_FROM ANICHIN_IMAGE ANICHIN_MIGRATE_IMAGE
+            do
+              send_secret "$key"
+            done
+          } | ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "cd '$APP_DIR' && ENV_FILE='$APP_DIR/.env' ./scripts/deploy-env.sh" <<EOF
-          POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-          POSTGRES_APP_PASSWORD=$POSTGRES_APP_PASSWORD
-          NEXTAUTH_SECRET=$NEXTAUTH_SECRET
-          NEXTAUTH_URL=$NEXTAUTH_URL
-          ANICHIN_IMAGE=$ANICHIN_IMAGE
-          ANICHIN_MIGRATE_IMAGE=$ANICHIN_MIGRATE_IMAGE
-          EOF
+            "cd '$APP_DIR' && ENV_FILE='$APP_DIR/.env' ./scripts/deploy-env.sh"
 
       - name: 🚀 Deploy staging (pull → migrate → health check → rollback)
         if: steps.preflight.outputs.deploy == 'true'

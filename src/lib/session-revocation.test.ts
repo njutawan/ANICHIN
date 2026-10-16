@@ -43,6 +43,7 @@ const DB_USER = {
   role: 'user',
   name: 'Nama DB',
   sessionVersion: 3,
+  emailVerified: new Date(),
 };
 
 beforeEach(() => {
@@ -69,7 +70,7 @@ describe('jwt callback — login (identitas dari DB)', () => {
 
     expect(dbMock.user.findUnique).toHaveBeenCalledWith({
       where: { email: 'user@example.com' },
-      select: { id: true, role: true, name: true, sessionVersion: true },
+      select: { id: true, role: true, name: true, sessionVersion: true, emailVerified: true },
     });
     expect(token).toMatchObject({
       id: 'db-user-1',
@@ -80,7 +81,19 @@ describe('jwt callback — login (identitas dari DB)', () => {
     expect(token.svCheckedAt).toBeTypeOf('number');
   });
 
-  it('tetap membuat token walau query identitas gagal (tanpa klaim sv)', async () => {
+  it('menolak login OAuth/kredensial bila row akun belum verified', async () => {
+    dbMock.user.findUnique.mockResolvedValue({ ...DB_USER, emailVerified: null });
+
+    const token = await jwtCallback({
+      token: {},
+      user: { id: 'provider-user', email: 'user@example.com', role: 'user' },
+    });
+
+    expect(token.id).toBeUndefined();
+    expect(token.role).toBeUndefined();
+  });
+
+  it('menolak membuat sesi jika query identitas gagal (fail closed)', async () => {
     dbMock.user.findUnique.mockRejectedValue(new Error('db down'));
 
     const token = await jwtCallback({
@@ -88,7 +101,8 @@ describe('jwt callback — login (identitas dari DB)', () => {
       user: { id: 'kredensial-1', email: 'user@example.com', role: 'admin' },
     });
 
-    expect(token.id).toBe('kredensial-1');
+    expect(token.id).toBeUndefined();
+    expect(token.role).toBeUndefined();
     expect(token.sv).toBeUndefined();
   });
 });
@@ -120,6 +134,17 @@ describe('jwt callback — validasi berkala & pencabutan', () => {
     expect(token.id).toBeUndefined();
     expect(token.role).toBeUndefined();
     expect(token.sv).toBeUndefined();
+  });
+
+  it('mencabut sesi lama jika email akun belum diverifikasi', async () => {
+    dbMock.user.findUnique.mockResolvedValue({ ...DB_USER, emailVerified: null });
+
+    const token = await jwtCallback({
+      token: { id: 'db-user-1', role: 'user', sv: 3, svCheckedAt: Date.now() - 120_000 },
+    });
+
+    expect(token.id).toBeUndefined();
+    expect(token.role).toBeUndefined();
   });
 
   it('mencabut token saat akun sudah dihapus', async () => {

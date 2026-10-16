@@ -28,6 +28,13 @@ const resetPage = read('src/app/auth/reset-password/page.tsx');
 const registerRoute = read('src/app/api/auth/register/route.ts');
 const resetRoute = read('src/app/api/auth/reset-password/route.ts');
 const secretsScript = read('scripts/setup-github-secrets.sh');
+const caddyfile = read('Caddyfile');
+const ipResolver = read('src/lib/ip.ts');
+const prodCompose = read('docker-compose.prod.yml');
+const stagingCompose = read('docker-compose.staging.yml');
+const setupEnvScript = read('scripts/setup-env.sh');
+const startPostgresScript = read('scripts/start-postgres.ts');
+const migrateToPgScript = read('scripts/migrate-to-pg.ts');
 
 describe('F-17 — setiap jalur yang menetapkan password memakai batas 72 byte', () => {
   it('register & reset (HTTP) memakai helper bersama, bukan angka literal', () => {
@@ -76,5 +83,29 @@ describe('F-15/F-16 — skrip setup secret menyiapkan kredensial baru', () => {
     // catatan eksplisit supaya tidak dipakai menjalankan aplikasi (web = role DML).
     expect(secretsScript).toContain('ROLE MIGRASI/owner');
     expect(secretsScript).toContain('POSTGRES_APP_PASSWORD (audit F-16)');
+  });
+});
+
+describe('proxy and deployment logging hardening', () => {
+  it('Caddy never grants opaque-origin CORS and overwrites client IP headers', () => {
+    expect(caddyfile).not.toMatch(/^\s*header\s+Access-Control-Allow-Origin\s+"null"/m);
+    expect(caddyfile).toContain('-Access-Control-Allow-Origin');
+    expect(caddyfile).toContain('header_up X-Forwarded-For {client_ip}');
+    expect(caddyfile).toContain('header_up X-Real-IP {client_ip}');
+    expect(caddyfile).toContain('header_up -CF-Connecting-IP');
+  });
+
+  it('does not trust forwarded IP headers unless the Caddy hop is explicitly configured', () => {
+    expect(ipResolver).toContain("if (raw == null || !/^\\d+$/.test(raw.trim())) return 0;");
+    expect(ipResolver).toContain("if (hops === 0) return 'unknown';");
+    expect(prodCompose).toContain('TRUSTED_PROXY_HOPS=${TRUSTED_PROXY_HOPS:-1}');
+    expect(stagingCompose).toContain('TRUSTED_PROXY_HOPS=${TRUSTED_PROXY_HOPS:-1}');
+  });
+
+  it('setup and migration scripts never print the DATABASE_URL value', () => {
+    expect(setupEnvScript).not.toContain('DATABASE_URL=${DATABASE_URL}');
+    expect(startPostgresScript).not.toContain('DATABASE_URL=${DATABASE_URL}');
+    expect(migrateToPgScript).not.toContain('Current: ${process.env.DATABASE_URL');
+    expect(migrateToPgScript).toContain('DATABASE_URL is ${process.env.DATABASE_URL ? \'set but invalid\' : \'unset\'} (value redacted).');
   });
 });

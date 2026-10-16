@@ -55,7 +55,7 @@ cp .env.example .env
 # Generate secure secrets
 NEXTAUTH_SECRET=$(openssl rand -base64 32)
 # POSTGRES_PASSWORD = role migrasi/owner (hak DDL) — dipakai `migrate` + `backup-cron`
-POSTGRES_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)
+POSTGRES_PASSWORD=$(openssl rand -hex 32)
 # POSTGRES_APP_PASSWORD = role aplikasi (DML saja) — dipakai `web` (audit F-16).
 # WAJIB berbeda dari POSTGRES_PASSWORD.
 POSTGRES_APP_PASSWORD=$(openssl rand -hex 32)
@@ -67,23 +67,26 @@ nano .env
 sed -i "s|NEXTAUTH_SECRET=.*|NEXTAUTH_SECRET=$NEXTAUTH_SECRET|" .env
 sed -i "s|POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$POSTGRES_PASSWORD|" .env
 sed -i "s|POSTGRES_APP_PASSWORD=.*|POSTGRES_APP_PASSWORD=$POSTGRES_APP_PASSWORD|" .env
+sed -i "s|TWO_FACTOR_ENCRYPTION_KEY=.*|TWO_FACTOR_ENCRYPTION_KEY=$TWO_FACTOR_KEY|" .env
 sed -i "s|NEXTAUTH_URL=.*|NEXTAUTH_URL=https://anichin.id|" .env
 sed -i "s|# SITE_DOMAIN=.*|SITE_DOMAIN=anichin.id|" .env
 
-# IMPORTANT: Save these secrets somewhere safe!
-echo "NEXTAUTH_SECRET=$NEXTAUTH_SECRET"
-echo "POSTGRES_PASSWORD=$POSTGRES_PASSWORD"
-echo "POSTGRES_APP_PASSWORD=$POSTGRES_APP_PASSWORD"
-
-# Verify .env
-cat .env | grep -v "^#" | grep -v "^$"
+# IMPORTANT: save the generated values in an approved secret manager.
+# Do not echo secrets or print the contents of .env into terminal/CI logs.
+# Verify permissions and list variable NAMES only (values remain hidden):
+chmod 600 .env
+stat -c '%a %U:%G %n' .env
+sed -nE '/^[A-Z_][A-Z0-9_]*=/s/=.*//p' .env
 
 # ─────────────────────────────────────────────────────────────
 # STEP 3: Create backup directory
 # ─────────────────────────────────────────────────────────────
 
 mkdir -p backups
-chmod 755 backups
+chmod 700 backups
+# Backup scripts use umask 077 and create dump/SQL/manifest files as mode 600.
+# Dumps contain user data and are not application-encrypted: use encrypted host
+# storage and encrypt any off-host copy with your organization-approved key.
 
 # Catatan: direktori `backups/wal` tidak dipakai lagi. WAL archiving di
 # docker-compose.prod.yml dihapus karena bind mount-nya selalu gagal ditulis
@@ -176,12 +179,20 @@ echo | openssl s_client -connect anichin.id:443 -servername anichin.id 2>/dev/nu
 # On your local machine (with gh CLI installed):
 gh auth login
 
-# WAJIB (deploy dibatalkan tanpa ini — lihat langkah "Validate deployment
-# configuration" di .github/workflows/deploy.yml)
-gh secret set NEXTAUTH_SECRET --body "$NEXTAUTH_SECRET"   # ≥32 karakter
+# WAJIB (deploy dibatalkan tanpa ini — lihat Validate deployment configuration):
+gh secret set NEXTAUTH_SECRET --body "$NEXTAUTH_SECRET"   # ≥32 karakter, bukan placeholder
 gh secret set NEXTAUTH_URL --body "https://anichin.id"    # wajib https://
 gh secret set POSTGRES_PASSWORD --body "$POSTGRES_PASSWORD"          # role migrasi/owner (DDL)
-gh secret set POSTGRES_APP_PASSWORD --body "$(openssl rand -hex 32)"  # role aplikasi (DML saja, F-16)
+gh secret set POSTGRES_APP_PASSWORD --body "$POSTGRES_APP_PASSWORD"    # role aplikasi (DML saja; wajib berbeda)
+gh secret set TWO_FACTOR_ENCRYPTION_KEY --body "$TWO_FACTOR_KEY"       # tepat 64 hex
+# Email verification/reset memerlukan SMTP yang benar-benar berfungsi:
+gh secret set SMTP_HOST --body "smtp.sendgrid.net"
+gh secret set SMTP_PORT --body "587"
+gh secret set SMTP_SECURE --body "false"
+gh secret set SMTP_USER --body "apikey"
+read -s -p "SMTP password/API key: " SMTP_PASS; echo
+gh secret set SMTP_PASS --body "$SMTP_PASS"
+gh secret set SMTP_FROM --body "no-reply@anichin.id"
 
 # SSH deploy secrets (dibutuhkan agar benar-benar men-deploy; tanpa
 # DEPLOY_HOST job `deploy` di-skip dan hanya image yang di-build)
@@ -201,13 +212,11 @@ ssh-keygen -lf deploy_host_key.txt        # cocokkan dengan fingerprint server!
 gh secret set DEPLOY_HOST_KEY < deploy_host_key.txt
 rm -f deploy_host_key.txt
 
-# OPSIONAL — kalau tidak diisi, kunci itu tidak ditulis ke .env:
-gh secret set SITE_DOMAIN --body "anichin.id"           # default: host dari NEXTAUTH_URL
-gh secret set NEXT_PUBLIC_SITE_URL --body "https://anichin.id"  # canonical/OG di bundle browser
-gh secret set TWO_FACTOR_ENCRYPTION_KEY --body "$(openssl rand -hex 32)"  # 64 hex; tanpa ini 2FA gagal
+# OPSIONAL:
+gh secret set SITE_DOMAIN --body "anichin.id"                 # default: host dari NEXTAUTH_URL
+gh secret set NEXT_PUBLIC_SITE_URL --body "https://anichin.id" # canonical/OG di bundle browser
 gh secret set IP_HASH_SALT --body "$(openssl rand -hex 16)"    # salt hash IP di audit log
 gh secret set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET
-gh secret set SMTP_HOST / SMTP_PORT / SMTP_SECURE / SMTP_USER / SMTP_PASS / SMTP_FROM
 
 # Registry (agar server bisa `docker pull`; kalau kosong server harus punya source)
 gh secret set REGISTRY --body "ghcr.io/your-org"
@@ -265,8 +274,9 @@ gh secret set STAGING_POSTGRES_APP_PASSWORD --body "$(openssl rand -hex 32)"
 #     kunci yang sudah ada hanya ditimpa bila secret-nya diisi. Setelan lokal
 #     lain (mis. SMTP_* yang diisi manual) tidak pernah dihapus —
 #     lihat scripts/deploy-env.sh.
-#   • Nilai secret dikirim lewat stdin ssh, tidak pernah masuk argv server
-#     maupun log Actions (selain di-mask otomatis oleh GitHub).
+#   • Nilai secret dikirim lewat stdin ssh sebagai base64 agar newline/karakter
+#     khusus tidak dapat menyisipkan baris .env; server menolak CR/LF/NUL dan
+#     mengutip format Compose. Nilai tidak dicetak ke log atau argv.
 
 # ─────────────────────────────────────────────────────────────
 # STEP 9: Set up SSH key for auto-deploy
@@ -342,10 +352,17 @@ docker compose -f docker-compose.prod.yml exec backup-cron /usr/local/bin/backup
 # List backups
 ls -la backups/
 
-# Restore from backup (interactive)
+# Restore from backup (destructive; interactive confirmation requires typing the exact target DB name)
+# First verify the selected backup on an isolated/disposable PostgreSQL instance.
+# Never use the restore test against production or any non-disposable database.
 docker compose -f docker-compose.prod.yml exec -it backup-cron /usr/local/bin/restore-db.sh auto-20260101-020000
 
-# Download backup to local machine
+# Backup integration test (CI runs this against an ephemeral PostgreSQL service).
+# For local use, point PGHOST/PGPORT/PGUSER only at a disposable test instance;
+# this creates and drops uniquely named temporary databases.
+# scripts/test-backup-restore.sh ./scripts/restore-db.sh ./scripts/backup-db.sh
+
+# Download backup to local machine (store it with restrictive permissions).
 scp deploy@server:/opt/anichin/backups/auto-*.dump ./local-backup/
 
 # ─────────────────────────────────────────────────────────────
