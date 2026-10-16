@@ -46,6 +46,15 @@ describe('runtime auth secret', () => {
     expect(() => authOptions.secret).toThrow('NEXTAUTH_SECRET too short');
   });
 
+  it('rejects production secrets under 32 characters and known placeholders', async () => {
+    const { authOptions } = await import('@/lib/auth');
+    vi.stubEnv('NEXTAUTH_SECRET', 'x'.repeat(31));
+    expect(() => authOptions.secret).toThrow(/at least 32 characters/);
+
+    vi.stubEnv('NEXTAUTH_SECRET', 'replace-with-a-strong-random-production-secret');
+    expect(() => authOptions.secret).toThrow(/placeholder or weak/);
+  });
+
   it('reads the secret supplied at runtime, after the module was imported', async () => {
     const { authOptions } = await import('@/lib/auth');
     const secret = 'runtime-only-test-secret-at-least-32-characters';

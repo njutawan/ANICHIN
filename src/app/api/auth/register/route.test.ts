@@ -13,10 +13,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
-const { dbMock, checkRateLimitMock, sendAccountExistsEmailMock, loggerMock } = vi.hoisted(() => ({
+const {
+  dbMock,
+  checkRateLimitMock,
+  createVerificationTokenMock,
+  sendAccountExistsEmailMock,
+  sendVerificationEmailMock,
+  loggerMock,
+} = vi.hoisted(() => ({
   dbMock: { user: { findUnique: vi.fn(), create: vi.fn() } },
   checkRateLimitMock: vi.fn(),
+  createVerificationTokenMock: vi.fn(),
   sendAccountExistsEmailMock: vi.fn(),
+  sendVerificationEmailMock: vi.fn(),
   loggerMock: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
@@ -27,8 +36,9 @@ vi.mock('@/lib/rate-limit', () => ({
   addRateLimitHeaders: (res: Response) => res,
 }));
 vi.mock('@/lib/email', () => ({
+  createVerificationToken: createVerificationTokenMock,
   sendAccountExistsEmail: sendAccountExistsEmailMock,
-  sendVerificationEmail: vi.fn(),
+  sendVerificationEmail: sendVerificationEmailMock,
 }));
 
 import { POST } from './route';
@@ -48,7 +58,9 @@ beforeEach(() => {
   checkRateLimitMock.mockResolvedValue(null);
   dbMock.user.findUnique.mockResolvedValue(null);
   dbMock.user.create.mockResolvedValue({ id: 'u1' });
+  createVerificationTokenMock.mockResolvedValue({ token: 'a'.repeat(64), expiresAt: new Date() });
   sendAccountExistsEmailMock.mockResolvedValue({ delivered: false, provider: 'console' });
+  sendVerificationEmailMock.mockResolvedValue({ delivered: true, provider: 'smtp' });
 });
 
 describe('F-12 — respon tidak membedakan email baru vs sudah terdaftar', () => {
@@ -59,6 +71,12 @@ describe('F-12 — respon tidak membedakan email baru vs sudah terdaftar', () =>
     expect(res.status).toBe(201);
     expect(body).toEqual({ registered: true });
     expect(dbMock.user.create).toHaveBeenCalledTimes(1);
+    expect(dbMock.user.create.mock.calls[0][0].data.emailVerified).toBeNull();
+    expect(createVerificationTokenMock).toHaveBeenCalledWith('u1');
+    expect(sendVerificationEmailMock).toHaveBeenCalledWith(
+      'baru@example.com',
+      expect.stringMatching(/\/api\/auth\/verify-email\?token=a{64}$/),
+    );
     // Tidak ada id/email/nama user di respons (bentuk respons tidak boleh
     // bergantung pada ada/tidaknya akun).
     expect(body).not.toHaveProperty('id');
@@ -66,7 +84,7 @@ describe('F-12 — respon tidak membedakan email baru vs sudah terdaftar', () =>
   });
 
   it('email sudah terdaftar → respons IDENTIK, dan pemilik email diberi tahu', async () => {
-    dbMock.user.findUnique.mockResolvedValue({ id: 'existing-1' });
+    dbMock.user.findUnique.mockResolvedValue({ id: 'existing-1', emailVerified: new Date() });
 
     const existingRes = await POST(request(VALID));
     const existingBody = await existingRes.json();
@@ -86,6 +104,19 @@ describe('F-12 — respon tidak membedakan email baru vs sudah terdaftar', () =>
     expect(dbMock.user.create).toHaveBeenCalledTimes(1);
   });
 
+  it('akun legacy yang belum verified dapat meminta token tanpa login', async () => {
+    dbMock.user.findUnique.mockResolvedValue({ id: 'legacy-user', emailVerified: null });
+
+    const res = await POST(request(VALID));
+
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ registered: true });
+    expect(dbMock.user.create).not.toHaveBeenCalled();
+    expect(createVerificationTokenMock).toHaveBeenCalledWith('legacy-user');
+    expect(sendVerificationEmailMock).toHaveBeenCalledTimes(1);
+    expect(sendAccountExistsEmailMock).not.toHaveBeenCalled();
+  });
+
   it('balapan pendaftaran (P2002) → respons juga identik, bukan 409', async () => {
     dbMock.user.create.mockRejectedValue(Object.assign(new Error('unique'), { code: 'P2002' }));
 
@@ -96,7 +127,7 @@ describe('F-12 — respon tidak membedakan email baru vs sudah terdaftar', () =>
   });
 
   it('kegagalan kirim email tidak mengubah respons maupun menggagalkan pendaftaran', async () => {
-    dbMock.user.findUnique.mockResolvedValue({ id: 'existing-1' });
+    dbMock.user.findUnique.mockResolvedValue({ id: 'existing-1', emailVerified: new Date() });
     sendAccountExistsEmailMock.mockRejectedValue(new Error('smtp down'));
 
     const res = await POST(request(VALID));

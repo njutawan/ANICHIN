@@ -181,10 +181,11 @@ describe('Google', () => {
 
     expect(result).toBe(true);
     expect(dbMock.user.create).not.toHaveBeenCalled();
-    expect(dbMock.user.update).toHaveBeenCalledWith({
-      where: { id: 'u1' },
-      data: { emailVerified: expect.any(Date) },
-    });
+    const update = dbMock.user.update.mock.calls[0][0];
+    expect(update.where).toEqual({ id: 'u1' });
+    expect(update.data.emailVerified).toBeInstanceOf(Date);
+    expect(update.data.password).toMatch(/^\$2[aby]\$/);
+    expect(update.data.sessionVersion).toEqual({ increment: 1 });
   });
 
   it('akun lokal sudah terverifikasi → tidak menulis ulang apa pun', async () => {

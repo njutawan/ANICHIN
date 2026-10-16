@@ -7,8 +7,15 @@
  */
 
 export async function register() {
-  // Only run Sentry on Node.js runtime (not Edge)
+  // Validate security-critical config before the Node.js server accepts traffic.
+  // Build-time collection is intentionally excluded; runtime auth config also
+  // validates NEXTAUTH_SECRET when authentication is first used.
   if (process.env.NEXT_RUNTIME === 'nodejs') {
+    if (process.env.NODE_ENV === 'production' && process.env.NEXT_PHASE !== 'phase-production-build') {
+      const { validateProductionEnvironment } = await import('@/lib/production-env');
+      validateProductionEnvironment();
+    }
+
     const sentryDsn = process.env.SENTRY_DSN;
 
     if (sentryDsn) {

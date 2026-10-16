@@ -1,54 +1,40 @@
-/**
- * Regresi audit: `POST /api/auth/send-verification` tidak boleh membalas token
- * verifikasi ke klien di produksi.
- *
- * Lapis pertahanan yang diuji:
- *   1. `email.ts` tidak lagi mengembalikan `devUrl` di produksi (diuji di
- *      src/lib/email-security.test.ts).
- *   2. Route ini tetap menyaring `devUrl` walau (mis. karena bug/refactor di
- *      masa depan) modul email mengembalikannya di produksi.
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
-const { dbMock, requireUserMock, checkRateLimitMock, emailMock } = vi.hoisted(() => ({
+const { dbMock, checkRateLimitMock, emailMock } = vi.hoisted(() => ({
   dbMock: { user: { findUnique: vi.fn() } },
-  requireUserMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   emailMock: { createVerificationToken: vi.fn(), sendVerificationEmail: vi.fn() },
 }));
 
 vi.mock('@/lib/db', () => ({ db: dbMock }));
-vi.mock('@/lib/session', () => ({ requireUser: requireUserMock }));
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: checkRateLimitMock,
   addRateLimitHeaders: (res: Response) => res,
 }));
 vi.mock('@/lib/email', () => emailMock);
+vi.mock('@/lib/logger', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
 
 import { POST } from './route';
 
-const SESSION = { user: { id: 'user-1', email: 'u@example.com', role: 'user' as const } };
-const TOKEN_URL =
-  'https://anichin.id/api/auth/verify-email?token=' + 'c'.repeat(64);
+const TOKEN_URL = 'https://anichin.id/api/auth/verify-email?token=' + 'c'.repeat(64);
 
-function request() {
+function request(email = 'u@example.com') {
   return new NextRequest('http://localhost/api/auth/send-verification', {
     method: 'POST',
-    headers: { 'content-length': '0' },
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email }),
   });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   checkRateLimitMock.mockResolvedValue(null);
-  requireUserMock.mockResolvedValue([SESSION, null]);
-  dbMock.user.findUnique.mockResolvedValue({
-    email: 'u@example.com',
-    emailVerified: null,
-    name: 'U',
-  });
+  dbMock.user.findUnique.mockResolvedValue({ id: 'user-1', email: 'u@example.com', emailVerified: null });
   emailMock.createVerificationToken.mockResolvedValue({ token: 'c'.repeat(64), expiresAt: new Date() });
+  emailMock.sendVerificationEmail.mockResolvedValue({ delivered: true, provider: 'console', devUrl: TOKEN_URL });
   vi.stubEnv('NEXTAUTH_URL', 'https://anichin.id');
 });
 
@@ -57,37 +43,49 @@ afterEach(() => {
 });
 
 describe('POST /api/auth/send-verification', () => {
-  it('produksi: tidak pernah membalas devUrl walau modul email mengembalikannya', async () => {
+  it('produksi: resend tidak memerlukan sesi dan tidak pernah mengembalikan token', async () => {
     vi.stubEnv('NODE_ENV', 'production');
-    emailMock.sendVerificationEmail.mockResolvedValue({
-      delivered: true,
-      provider: 'console',
-      devUrl: TOKEN_URL, // seolah-olah bug lama muncul lagi
-    });
 
     const res = await POST(request());
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body.devUrl).toBeUndefined();
+    expect(body).toEqual({ sent: true });
+    expect(dbMock.user.findUnique).toHaveBeenCalledWith({
+      where: { email: 'u@example.com' },
+      select: { id: true, email: true, emailVerified: true },
+    });
+    expect(emailMock.createVerificationToken).toHaveBeenCalledWith('user-1');
+    expect(emailMock.sendVerificationEmail).toHaveBeenCalledWith('u@example.com', TOKEN_URL);
     expect(JSON.stringify(body)).not.toContain('token=');
   });
 
   it('non-produksi: devUrl diteruskan supaya QA bisa mengklik link', async () => {
     vi.stubEnv('NODE_ENV', 'test');
-    emailMock.sendVerificationEmail.mockResolvedValue({
-      delivered: true,
-      provider: 'console',
-      devUrl: TOKEN_URL,
-    });
 
     const res = await POST(request());
     const body = await res.json();
 
-    expect(body.devUrl).toBe(TOKEN_URL);
+    expect(body).toEqual({ sent: true, devUrl: TOKEN_URL });
   });
 
-  it('SMTP gagal (delivered:false) → 502 dengan pesan generik', async () => {
+  it('alamat tidak dikenal atau sudah verified mendapat respons identik tanpa email', async () => {
+    dbMock.user.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      id: 'verified-user',
+      email: 'u@example.com',
+      emailVerified: new Date(),
+    });
+
+    const unknown = await POST(request());
+    const verified = await POST(request());
+
+    expect(unknown.status).toBe(verified.status);
+    expect(await unknown.json()).toEqual(await verified.json());
+    expect(emailMock.createVerificationToken).not.toHaveBeenCalled();
+    expect(emailMock.sendVerificationEmail).not.toHaveBeenCalled();
+  });
+
+  it('SMTP gagal: tetap memberi respons generik anti-enumeration dan tidak membocorkan detail', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     emailMock.sendVerificationEmail.mockResolvedValue({
       delivered: false,
@@ -98,8 +96,20 @@ describe('POST /api/auth/send-verification', () => {
     const res = await POST(request());
     const body = await res.json();
 
-    expect(res.status).toBe(502);
-    expect(body.error).toBeTypeOf('string');
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ sent: true });
     expect(JSON.stringify(body)).not.toContain('SMTP not configured');
+  });
+
+  it('menolak JSON besar dan format email invalid', async () => {
+    const oversized = new NextRequest('http://localhost/api/auth/send-verification', {
+      method: 'POST',
+      headers: { 'content-length': '5000', 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'u@example.com' }),
+    });
+    expect((await POST(oversized)).status).toBe(413);
+
+    expect((await POST(request('not-an-email'))).status).toBe(400);
+    expect(dbMock.user.findUnique).not.toHaveBeenCalled();
   });
 });

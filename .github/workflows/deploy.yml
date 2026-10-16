@@ -1,6 +1,6 @@
 # ============================================================================
 # AniChin — Production Deploy Pipeline
-# Triggered: push to main, manual dispatch
+# Triggered after the CI workflow succeeds on main, or by guarded manual dispatch
 # Features: build → push image → bootstrap server → deploy → health check →
 #           rollback on fail
 #
@@ -39,7 +39,9 @@
 name: Deploy Production
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -65,6 +67,7 @@ concurrency:
 # (secrets.REGISTRY_USER/PASS), bukan GITHUB_TOKEN.
 permissions:
   contents: read
+  actions: read
 
 jobs:
   # ── Job 1: Preflight — deteksi target deploy ───────────────
@@ -76,6 +79,14 @@ jobs:
     name: 🧭 Preflight
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # workflow_run can report PR completions too: deploy only from a successful
+    # same-repo push to main, never by checking out untrusted PR code with secrets.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.head_branch == 'main')
     outputs:
       deploy: ${{ steps.detect.outputs.deploy }}
       host_key: ${{ steps.detect.outputs.host_key }}
@@ -85,6 +96,28 @@ jobs:
       build_only: ${{ steps.detect.outputs.build_only }}
       proceed: ${{ steps.detect.outputs.proceed }}
     steps:
+      # Automatic deploys require successful CI for a push from this repository
+      # to main (never a successful untrusted pull_request workflow_run).
+      # Manual deploys prove the exact main SHA; explicit rollback is the only
+      # path that intentionally restores an old image without a fresh CI run.
+      - name: 🛑 Verify CI success for manual deployment
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.rollback != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Manual deploy is allowed only from main."
+            exit 1
+          fi
+          successful_runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&head_sha=$SOURCE_SHA&per_page=100" --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')"
+          if [ "$successful_runs" -lt 1 ]; then
+            echo "::error::No successful CI run found for $SOURCE_SHA; deployment is blocked."
+            exit 1
+          fi
+          echo "✓ CI succeeded for $SOURCE_SHA."
+
       # NOTE: `env.X` set on a step is NOT visible in that same step's `if:`,
       # so the old `if: env.DEPLOY_HOST != ''` conditions were always false
       # (deploy/login/smoke silently skipped). Secrets are resolved here once
@@ -173,6 +206,8 @@ jobs:
       name: ${{ github.event.inputs.environment || 'production' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: 🧭 Resolve deploy settings
         id: cfg
@@ -209,72 +244,75 @@ jobs:
           GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID || secrets.OAUTH_GITHUB_CLIENT_ID }}
           GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET || secrets.OAUTH_GITHUB_CLIENT_SECRET }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
         run: |
           set -euo pipefail
-          MISSING=()
-          [ -z "$NEXTAUTH_SECRET" ] && MISSING+=("NEXTAUTH_SECRET")
-          [ -z "$NEXTAUTH_URL" ] && MISSING+=("NEXTAUTH_URL")
+          check_secret() {
+            local name="$1" value="$2" minimum="$3"
+            if [ "${#value}" -lt "$minimum" ]; then
+              echo "::error::$name must be at least $minimum characters"
+              exit 1
+            fi
+            local lower unique
+            lower=$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')
+            case "$lower" in
+              change-me*|replace-with*|your-*|example*|password*|secret123|*change-in-production*)
+                echo "::error::$name contains a known placeholder/weak value"
+                exit 1
+                ;;
+            esac
+            unique=$(printf '%s' "$value" | fold -w1 | sort -u | wc -l | tr -d ' ')
+            if [ "$unique" -lt 8 ]; then
+              echo "::error::$name does not have enough character diversity"
+              exit 1
+            fi
+          }
 
+          MISSING=()
+          for name in NEXTAUTH_SECRET NEXTAUTH_URL TWO_FACTOR_ENCRYPTION_KEY SMTP_HOST SMTP_USER SMTP_PASS; do
+            [ -n "${!name}" ] || MISSING+=("$name")
+          done
           if [ ${#MISSING[@]} -gt 0 ]; then
             echo "::error::Missing required GitHub Secrets: ${MISSING[*]}"
-            echo ""
-            echo "Configure them at:"
-            echo "  https://github.com/${{ github.repository }}/settings/secrets/actions"
+            echo "Configure them at: https://github.com/${{ github.repository }}/settings/secrets/actions"
             exit 1
           fi
 
-          # POSTGRES_PASSWORD tidak dipaksa di sini: docker compose membacanya
-          # dari .env di direktori deploy (${POSTGRES_PASSWORD:?...}), jadi
-          # server yang sudah punya .env tetap bisa deploy tanpa secret ini.
-          if [ -z "$POSTGRES_PASSWORD" ]; then
-            echo "::notice title=POSTGRES_PASSWORD tidak diset::Secret POSTGRES_PASSWORD kosong — memakai nilai yang sudah ada di .env server. Kalau .env belum ada, compose akan gagal start dengan 'POSTGRES_PASSWORD is required'."
-          fi
-
-          # F-16: password role aplikasi (DML-only) untuk service `web`.
-          # Sama seperti di atas, nilai di .env server tetap dipakai bila secret
-          # ini kosong — tetapi compose menolak start tanpa salah satunya.
-          if [ -z "$POSTGRES_APP_PASSWORD" ]; then
-            echo "::notice title=POSTGRES_APP_PASSWORD tidak diset::Secret POSTGRES_APP_PASSWORD kosong — memakai nilai yang sudah ada di .env server. Set 'openssl rand -hex 32' agar web memakai role DML-only (bukan role pemilik database); kalau keduanya kosong, compose akan gagal start."
-          fi
-
-          # NEXTAUTH_SECRET harus kuat (app menolak <16, dokumentasi menyarankan ≥32).
-          if [ ${#NEXTAUTH_SECRET} -lt 32 ]; then
-            echo "::error::NEXTAUTH_SECRET too short (${#NEXTAUTH_SECRET} chars, need ≥32)"
-            echo "Generate with: openssl rand -base64 32"
-            exit 1
-          fi
-
-          # NEXTAUTH_URL wajib HTTPS di produksi (cookie Secure + OAuth redirect).
+          check_secret NEXTAUTH_SECRET "$NEXTAUTH_SECRET" 32
           if [[ ! "$NEXTAUTH_URL" =~ ^https:// ]]; then
-            echo "::error::NEXTAUTH_URL must use HTTPS in production (got: $NEXTAUTH_URL)"
+            echo "::error::NEXTAUTH_URL must use HTTPS in production"
+            exit 1
+          fi
+          if ! printf '%s' "$TWO_FACTOR_ENCRYPTION_KEY" | grep -qE '^[0-9a-fA-F]{64}$'; then
+            echo "::error::TWO_FACTOR_ENCRYPTION_KEY must be exactly 64 hexadecimal characters"
+            exit 1
+          fi
+          check_secret TWO_FACTOR_ENCRYPTION_KEY "$TWO_FACTOR_ENCRYPTION_KEY" 64
+          check_secret SMTP_PASS "$SMTP_PASS" 16
+
+          # Optional in GitHub only when an already-configured server .env is
+          # used; docker-compose's env-check validates the effective values.
+          for name in POSTGRES_PASSWORD POSTGRES_APP_PASSWORD; do
+            value="${!name}"
+            if [ -n "$value" ]; then check_secret "$name" "$value" 32; fi
+          done
+          if [ -n "$POSTGRES_PASSWORD" ] && [ -n "$POSTGRES_APP_PASSWORD" ] && [ "$POSTGRES_PASSWORD" = "$POSTGRES_APP_PASSWORD" ]; then
+            echo "::error::POSTGRES_PASSWORD and POSTGRES_APP_PASSWORD must differ"
             exit 1
           fi
 
-          # Provider OAuth OPSIONAL: aplikasi hanya menampilkan tombol yang
-          # env-nya terisi (src/lib/auth.ts). Sebelumnya Google dipaksa wajib,
-          # sehingga deploy gagal hanya karena login Google belum diisi.
+          # Provider OAuth is optional; only configured buttons are shown.
           if [ -z "$GOOGLE_CLIENT_ID" ] || [ -z "$GOOGLE_CLIENT_SECRET" ]; then
-            echo "::warning title=Google OAuth tidak aktif::GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET kosong — tombol login Google disembunyikan."
+            echo "::warning title=Google OAuth tidak aktif::Google OAuth credentials are not configured."
           fi
           if [ -z "$GITHUB_CLIENT_ID" ] || [ -z "$GITHUB_CLIENT_SECRET" ]; then
-            echo "::warning title=GitHub OAuth tidak aktif::GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET kosong — tombol login GitHub disembunyikan."
-          fi
-          if [ -z "$TWO_FACTOR_ENCRYPTION_KEY" ]; then
-            echo "::warning title=2FA tidak dikonfigurasi::TWO_FACTOR_ENCRYPTION_KEY kosong — pengguna yang mengaktifkan 2FA akan gagal (src/lib/two-factor.ts menolak tanpa kunci ini di produksi)."
-          elif ! printf '%s' "$TWO_FACTOR_ENCRYPTION_KEY" | grep -qE '^[0-9a-fA-F]{64}$'; then
-            # Validator runtime hanya menerima 64 hex char. Kunci base64 (44 char,
-            # hasil `openssl rand -base64 32`) LOLOS deploy tapi membuat
-            # /api/auth/2fa/enable gagal 500 — 2FA praktis tidak bisa diaktifkan
-            # dan errornya baru terlihat saat pengguna mencoba. Peringatkan di sini.
-            echo "::warning title=Format TWO_FACTOR_ENCRYPTION_KEY salah::Nilai ini bukan 64 hex char — 2FA akan gagal aktif (src/lib/two-factor.ts). Generate ulang: openssl rand -hex 32"
-          fi
-          if [ -z "$SMTP_HOST" ]; then
-            echo "::notice title=SMTP belum diset::SMTP_HOST kosong — verifikasi email & reset password tidak akan mengirim email."
+            echo "::warning title=GitHub OAuth tidak aktif::GitHub OAuth credentials are not configured."
           fi
 
-          echo "✅ Konfigurasi wajib lengkap"
+          echo "✅ Required production secrets validated."
           echo "  NEXTAUTH_URL: $NEXTAUTH_URL"
-          echo "  NEXTAUTH_SECRET: [${#NEXTAUTH_SECRET} chars]"
+          echo "  NEXTAUTH_SECRET: [${#NEXTAUTH_SECRET} chars; value hidden]"
 
       # Rollback manual saat DEPLOY_HOST belum diisi → job akan "sukses" tanpa
       # melakukan apa pun (semua langkah lain di-skip). Itu hijau palsu, jadi
@@ -392,13 +430,13 @@ jobs:
           push: ${{ needs.preflight.outputs.registry == 'true' }}
           provenance: false
           tags: |
-            ${{ secrets.REGISTRY || 'anichin' }}/anichin:prod-${{ github.sha }}
+            ${{ secrets.REGISTRY || 'anichin' }}/anichin:prod-${{ github.event.workflow_run.head_sha || github.sha }}
             ${{ secrets.REGISTRY || 'anichin' }}/anichin:prod-latest
             ${{ secrets.REGISTRY || 'anichin' }}/anichin:prod-current
           build-args: |
             DATABASE_PROVIDER=postgresql
             NEXT_PUBLIC_SITE_URL=${{ secrets.NEXTAUTH_URL }}
-            NEXT_PUBLIC_BUILD_ID=${{ github.sha }}
+            NEXT_PUBLIC_BUILD_ID=${{ github.event.workflow_run.head_sha || github.sha }}
           cache-from: ${{ needs.preflight.outputs.registry == 'true' && format('type=registry,ref={0}/anichin:buildcache', secrets.REGISTRY) || '' }}
           cache-to: ${{ needs.preflight.outputs.registry == 'true' && format('type=registry,ref={0}/anichin:buildcache,mode=max', secrets.REGISTRY) || '' }}
 
@@ -415,7 +453,7 @@ jobs:
           push: ${{ needs.preflight.outputs.registry == 'true' }}
           provenance: false
           tags: |
-            ${{ secrets.REGISTRY || 'anichin' }}/anichin:prod-migrate-${{ github.sha }}
+            ${{ secrets.REGISTRY || 'anichin' }}/anichin:prod-migrate-${{ github.event.workflow_run.head_sha || github.sha }}
             ${{ secrets.REGISTRY || 'anichin' }}/anichin:prod-migrate
           build-args: |
             DATABASE_PROVIDER=postgresql
@@ -458,8 +496,8 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           APP_DIR: ${{ steps.cfg.outputs.app_dir }}
-          # Secret dikirim lewat STDIN (heredoc), bukan argv → tidak terlihat
-          # di `ps` server dan di-mask GitHub pada log.
+          # Secret dikirim lewat STDIN, bukan argv; transportnya base64 agar
+          # karakter khusus/newline tidak bisa inject catatan .env tambahan.
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           # F-16: kredensial role aplikasi — disimpan terpisah di .env server.
           POSTGRES_APP_PASSWORD: ${{ secrets.POSTGRES_APP_PASSWORD }}
@@ -490,35 +528,26 @@ jobs:
             SITE_DOMAIN="${SITE_DOMAIN%%/*}"
           fi
 
-          # Heredoc TANPA kutip (berbeda dari langkah deploy) adalah pilihan
-          # sadar: variabel harus diekspansi di RUNNER (di situlah secret
-          # berada), lalu nilainya dikirim sebagai stdin ssh. Skrip di server
-          # membaca KEY=VALUE dari stdin dan tidak pernah mencetak nilainya.
-          # shellcheck disable=SC2087
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+          # Encode on the runner so quotes, $, spaces, or embedded newlines in
+          # a GitHub secret cannot inject extra KEY=VALUE records over SSH.
+          send_secret() {
+            local key="$1"
+            local value="${!key}"
+            printf '%s_B64=%s\n' "$key" "$(printf '%s' "$value" | base64 -w0)"
+          }
+          {
+            for key in \
+              POSTGRES_PASSWORD POSTGRES_APP_PASSWORD NEXTAUTH_SECRET NEXTAUTH_URL \
+              NEXT_PUBLIC_SITE_URL SITE_DOMAIN TWO_FACTOR_ENCRYPTION_KEY IP_HASH_SALT \
+              GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET \
+              SMTP_HOST SMTP_PORT SMTP_SECURE SMTP_USER SMTP_PASS SMTP_FROM \
+              ANICHIN_IMAGE ANICHIN_MIGRATE_IMAGE
+            do
+              send_secret "$key"
+            done
+          } | ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "cd '$APP_DIR' && ENV_FILE='$APP_DIR/.env' ./scripts/deploy-env.sh" <<EOF
-          POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-          POSTGRES_APP_PASSWORD=$POSTGRES_APP_PASSWORD
-          NEXTAUTH_SECRET=$NEXTAUTH_SECRET
-          NEXTAUTH_URL=$NEXTAUTH_URL
-          NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
-          SITE_DOMAIN=$SITE_DOMAIN
-          TWO_FACTOR_ENCRYPTION_KEY=$TWO_FACTOR_ENCRYPTION_KEY
-          IP_HASH_SALT=$IP_HASH_SALT
-          GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
-          GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET
-          GITHUB_CLIENT_ID=$GITHUB_CLIENT_ID
-          GITHUB_CLIENT_SECRET=$GITHUB_CLIENT_SECRET
-          SMTP_HOST=$SMTP_HOST
-          SMTP_PORT=$SMTP_PORT
-          SMTP_SECURE=$SMTP_SECURE
-          SMTP_USER=$SMTP_USER
-          SMTP_PASS=$SMTP_PASS
-          SMTP_FROM=$SMTP_FROM
-          ANICHIN_IMAGE=$ANICHIN_IMAGE
-          ANICHIN_MIGRATE_IMAGE=$ANICHIN_MIGRATE_IMAGE
-          EOF
+            "cd '$APP_DIR' && ENV_FILE='$APP_DIR/.env' ./scripts/deploy-env.sh"
 
       - name: 🚀 Deploy via Docker Compose (pull → migrate → health → rollback)
         if: success() && github.event.inputs.rollback != 'true' && needs.preflight.outputs.deploy == 'true'

@@ -114,6 +114,7 @@ export async function POST(req: NextRequest) {
         where: { id: resetRecord.userId },
         data: {
           password: hashedPassword,
+          emailVerified: new Date(),
           sessionVersion: { increment: 1 },
         },
       }),

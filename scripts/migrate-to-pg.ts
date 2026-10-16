@@ -44,7 +44,7 @@ if (!fs.existsSync(SQLITE_PATH)) {
 
 if (!process.env.DATABASE_URL?.startsWith('postgresql://')) {
   console.error('❌ DATABASE_URL must be a PostgreSQL URL for this script.');
-  console.error(`   Current: ${process.env.DATABASE_URL ?? '(unset)'}`);
+  console.error(`   DATABASE_URL is ${process.env.DATABASE_URL ? 'set but invalid' : 'unset'} (value redacted).`);
   process.exit(1);
 }
 
@@ -152,7 +152,7 @@ async function main() {
   console.log('🚚 AniChin — SQLite → PostgreSQL Migration');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log(`Source: ${SQLITE_PATH}`);
-  console.log(`Target: ${process.env.DATABASE_URL?.replace(/:[^:@]+@/, ':***@')}`);
+  console.log('Target: DATABASE_URL configured (credentials redacted)');
 
   // Verify target DB is reachable
   console.log('\n🔌 Connecting to PostgreSQL...');

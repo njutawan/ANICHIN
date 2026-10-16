@@ -1,10 +1,12 @@
-# AniChin — Audit Keamanan (19 Poin)
+# AniChin — Audit Keamanan (19 Poin + Hardening Tambahan)
 
-**Tanggal:** 2026-10-14
+**Tanggal audit awal:** 2026-10-14
 **Skop:** seluruh repo `njutawan/ANICHIN` (Next.js 16 App Router + NextAuth v4 + Prisma/PostgreSQL + Docker/Caddy + GitHub Actions)
-**Commit dasar:** `eb52573` (branch `arena/c4ede340-anichin`)
-**Terakhir diperbarui:** 2026-10-15 — **batch penutup F-11…F-17** (`src/lib/redis-client.ts`, `src/lib/two-factor-pending.ts`, `src/app/api/auth/register/route.ts`, `src/app/api/health/route.ts`, `src/lib/security.ts`, `src/app/api/admin/anime/**`, `.github/workflows/{deploy,staging}.yml`, `docker-compose.{prod,staging}.yml`, `scripts/postgres-init/10-app-role.sh`, `scripts/compose-deploy.sh`). Seluruh 19 temuan kini tertutup.
-**Metode:** pembacaan kode baris-per-baris pada jalur auth/data/DB/deploy, pemindaian seluruh objek Git (344 blob, semua branch), `npm audit`, dan menjalankan test suite.
+**Commit dasar audit awal:** `eb52573` (branch `arena/c4ede340-anichin`)
+**Terakhir diperbarui:** 2026-10-16 — tujuh prioritas hardening tambahan; lihat §6 untuk status kode dan pemeriksaan terkini.
+**Metode audit awal:** pembacaan jalur auth/data/DB/deploy, pemindaian objek Git, audit dependency, dan test suite.
+
+> **Status terkini:** §§1–5 mempertahankan temuan dan hasil verifikasi historis F-01…F-19 (termasuk angka test/audit lama); jangan perlakukan hasil itu sebagai status build saat ini. §6 supersedes hasil lama: full `bun audit` bersih setelah dependency chain ESLint rentan dihapus (mitigasi graph, bukan patch upstream), full ESLint lulus, dan batasan Prisma/Docker/restore/live deploy dicatat eksplisit.
 
 ---
 
@@ -32,7 +34,7 @@
 | 18 | Reset password aman | ✅ | Token 32 byte CSPRNG, sekali pakai, kedaluwarsa 1 jam, semua token lain dibatalkan dalam transaksi, pesan generik anti-enumeration, dan **semua sesi lama dicabut** (`sessionVersion`) saat password diganti. **F-02 & template email diperbaiki.** **F-12: pendaftaran juga anti-enumeration (respons seragam + notifikasi email).** |
 | 19 | Batasi file upload | ➖ | **Tidak ada fitur upload** (tidak ada `formData()`/multipart/tulis file dari request). Yang ada hanya URL gambar eksternal dari admin (lihat F-14) dan optimizer `next/image` yang host-nya sudah di-allowlist. |
 
-**Hasil perintah verifikasi**
+**Hasil perintah verifikasi audit awal (historis; lihat §6 untuk hasil terbaru)**
 
 ```
 npm audit --omit=dev   → 0 vulnerabilities (311 dependensi produksi)
@@ -42,7 +44,7 @@ npx tsc --noEmit       → bersih
 npx eslint .           → bersih
 ```
 
-**Perubahan kode pada audit ini:** **19 temuan diperbaiki** (F-01…F-19) — **tidak ada temuan terbuka** — ditambah **160 test regresi** baru (14 pada audit awal, 27 pada lanjutan F-06/F-18, 22 pada lanjutan F-07/F-19, 38 pada lanjutan F-10, 52 pada batch penutup F-11…F-17, 7 pada verifikasi ulang lintas-jalur).
+**Perubahan kode pada audit awal:** **19 temuan diperbaiki** (F-01…F-19) — **tidak ada temuan terbuka** — ditambah **160 test regresi** baru (14 pada audit awal, 27 pada lanjutan F-06/F-18, 22 pada lanjutan F-07/F-19, 38 pada lanjutan F-10, 52 pada batch penutup F-11…F-17, 7 pada verifikasi ulang lintas-jalur).
 
 ---
 
@@ -223,7 +225,7 @@ Prefix hilang karena `cookies` dikonfigurasi manual di `authOptions`. Sekarang `
 ## 3. Yang sudah benar (bukti ringkas)
 
 - **Rahasia & env:** `.gitignore` (`.env*`, `!.env.example`, `.env.admin`, `/logs/`, `/pgdata/`), `.dockerignore` mengecualikan `.env*`; `scripts/deploy-env.sh` menulis `.env` dari stdin dengan `umask 077` + `chmod 600` dan tidak pernah mencetak nilai; `setup-github-secrets.sh` menyimpan backup di `$HOME` (di luar repo) dengan `chmod 600`; CI memakai `permissions: contents: read` dan action dipin ke SHA.
-- **Autentikasi:** NextAuth v4 kredensial + OAuth opsional; `resolveSecret()` melempar error di produksi bila `NEXTAUTH_SECRET` hilang/<16 char; lockout 5 gagal/15 menit (Redis/in-memory) dengan kunci `email+IP`; `getClientIp()` hanya mempercayai header edge atau entri XFF dari kanan sejumlah `TRUSTED_PROXY_HOPS`; Caddy menimpa `X-Forwarded-For` dengan IP soket → spoofing header tidak bisa melewati rate limit/lockout.
+- **Autentikasi:** NextAuth v4 kredensial + OAuth opsional; `resolveSecret()` melempar error di produksi bila `NEXTAUTH_SECRET` hilang/<16 char; lockout 5 gagal/15 menit (Redis/in-memory) dengan kunci `email+IP`; `getClientIp()` hanya memakai XFF sesuai jumlah `TRUSTED_PROXY_HOPS` dan mengabaikan header edge khusus maupun `X-Real-IP` yang tidak terverifikasi; Caddy menimpa XFF/X-Real-IP dengan `{client_ip}` yang sudah divalidasi terhadap trusted proxies → spoofing header tidak bisa melewati rate limit/lockout.
 - **Otorisasi:** `src/lib/session.ts` (`requireUser`/`requireAdmin`) dipakai di semua route yang butuh; 5/5 file `src/app/api/admin/**` memanggil `requireAdmin`; proxy memblokir `/admin*` untuk non-admin pada Edge (JWT), `/admin` juga `noindex`; admin tidak bisa menurunkan role sendiri.
 - **Redis bersama (setelah F-11):** `src/lib/redis-client.ts` adalah satu-satunya klien ioredis — dipakai `rate-limit-store.ts` dan `two-factor-pending.ts`; tanpa `REDIS_URL` keduanya jatuh ke in-memory (rate limit/lockout per proses, pending 2FA per proses) dan inisialisasi gagal hanya menghasilkan warning, bukan crash.
 - **Rate limit & audit:** tier `auth` 20 / `search` 30 / `read` 60 / `expensive` 10 per menit per IP, respons 429 + `Retry-After` + header `X-RateLimit-*`; audit log `logs/audit.jsonl` (rotasi 10 MB, dilewati di serverless) dengan IP di-HMAC-SHA256 memakai `IP_HASH_SALT`.
@@ -264,10 +266,11 @@ Prefix hilang karena `cookies` dikonfigurasi manual di `authOptions`. Sekarang `
 ## 5. Cara verifikasi ulang
 
 ```bash
-npm ci && npx prisma generate          # CI resmi
-npm audit --omit=dev                   # wajib 0 vulnerability (dipakai CI)
-npx tsc --noEmit && npx eslint .
-npx vitest run                         # 455 test, termasuk 160 regresi audit ini
+bun install --frozen-lockfile
+bun audit                               # audit seluruh graph, termasuk dev dependencies
+bun run db:generate                    # membutuhkan Prisma engine; CI memakai PostgreSQL service
+bunx tsc --noEmit && bun run lint
+bunx vitest run
 # uji manual cepat (dev):
 #   1. Tanpa SMTP + NODE_ENV=production → POST /api/auth/send-verification
 #      tidak boleh memuat devUrl, dan log tidak memuat ?token=
@@ -308,3 +311,18 @@ npx vitest run                         # 455 test, termasuk 160 regresi audit in
 ```
 
 > Catatan lingkungan: pada sandbox audit ini `prisma generate` tidak dapat mengunduh engine (hanya `registry.npmjs.org` yang diizinkan), sehingga suite `src/lib/auth.test.ts` tidak dapat dijalankan; seluruh suite lain lulus.
+
+---
+
+## 6. Hardening tambahan (16 Oktober 2026)
+
+- **Startup produksi:** `src/lib/production-env.ts` menolak secret placeholder/pendek, URL NextAuth non-HTTPS/loopback/contoh, URL database non-PostgreSQL atau password lemah, SMTP tidak lengkap, dan key 2FA selain 64 hex. `src/instrumentation.ts` menjalankannya sebelum server menerima traffic; `docker-compose.*.yml` punya `env-check` sebelum database/web.
+- **Verifikasi email:** password login hanya menerima akun `emailVerified`; pendaftaran membuat akun belum verified dan mengirim token ke mailbox tanpa membuat sesi. Resend publik memakai respons anti-enumeration, OAuth hanya menerima bukti email provider, dan reset-password menandai email terverifikasi setelah token single-use berhasil dipakai.
+- **CSRF/IP/CORS:** proxy menolak mutasi API cross-origin/opaque-origin; `same-site` tanpa `Origin` juga ditolak. Caddy tidak mengeluarkan header CORS `null` dan menimpa forwarded-IP headers. Resolver IP mengabaikan XFF kecuali jumlah hop dipercaya diatur eksplisit (`TRUSTED_PROXY_HOPS`, default 0); Compose prod/staging mengonfigurasi satu hop Caddy. Header edge khusus dan `X-Real-IP` mentah tidak dipercaya.
+- **Redirect dan logging:** callback NextAuth membandingkan parsed origin serta menolak userinfo; skrip setup/migrasi hanya menyatakan `DATABASE_URL` terkonfigurasi dan tidak mencetak nilainya.
+- **Backup/restore:** direktori dedicated mode 700, file mode 600, umask 077, nama/identifier divalidasi, symlink dan direktori sistem ditolak, restore meminta nama database secara eksplisit. `scripts/test-backup-restore.sh` hanya membuat/menghapus database bernama unik pada layanan PostgreSQL disposable. Backup belum dienkripsi aplikasi; gunakan storage host terenkripsi dan enkripsi salinan off-host.
+- **Dependency advisory:** pemeriksaan npm registry 16 Oktober 2026 masih menunjukkan `braces@3.0.3` sebagai rilis terbaru, tanpa versi upstream yang diperbaiki. Mitigasi yang diterapkan adalah menghapus `eslint-config-next` dan dependency chain rentan dari `bun.lock` (audit graph kini tidak menemukan paket `braces`), sambil mempertahankan React/hooks/a11y/TypeScript lint. Ini mitigasi pada graph, bukan patch upstream; Next-specific ESLint rules diaktifkan kembali setelah chain aman. `bun audit` blocking tetap aktif, dan deploy production/staging hanya berjalan setelah successful CI push dari repo yang sama ke branch target (manual deploy memeriksa SHA yang dipilih; rollback eksplisit memakai image sebelumnya).
+
+**Pemeriksaan lokal (16 Oktober 2026):** full ESLint lulus. Full Vitest menjalankan 54 file: 53 lulus dengan 490 assertions; satu suite (`src/lib/auth.test.ts`) tidak bisa dimuat karena generated Prisma Client (`.prisma/client/default`) belum tersedia. `tsc --noEmit` hanya melaporkan `PrismaClient` yang hilang dari hasil generate yang sama. `bun audit` lulus (792 paket; dependency graph tidak lagi memuat `braces`). Shell syntax, YAML parsing kelima file workflow/Compose, `bash -n` untuk semua run-block workflow, dan pengujian shell `env-check` Compose (origin publik diterima, 12 URL invalid ditolak per file) lulus. Uji path backup/restore menolak direktori sistem dan working tree sebelum koneksi DB atau perubahan permission.
+
+**Belum dijalankan/tersedia:** build/typecheck penuh terhalang Prisma Client yang belum di-generate; Docker/PostgreSQL lokal tidak tersedia sehingga integration test backup/restore dan Compose runtime validation tidak dijalankan. Tidak ada restore/backup aktual, deployment live, `actionlint`, atau pemeriksaan branch protection. Workflow CI menjalankan restore integration test hanya terhadap PostgreSQL service ephemeral.

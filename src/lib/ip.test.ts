@@ -12,6 +12,10 @@ function headers(init: Record<string, string>): Headers {
   return new Headers(init);
 }
 
+function trustOneProxy(): void {
+  vi.stubEnv('TRUSTED_PROXY_HOPS', '1');
+}
+
 describe('sanitizeIp', () => {
   it('accepts IPv4 dan IPv6', () => {
     expect(sanitizeIp('203.0.113.7')).toBe('203.0.113.7');
@@ -37,17 +41,41 @@ describe('getClientIpFromHeaders', () => {
     vi.unstubAllEnvs();
   });
 
-  it('memprioritaskan header edge yang tidak bisa dipalsukan', () => {
+  it('tidak mempercayai XFF tanpa konfigurasi proxy eksplisit', () => {
+    const previous = process.env.TRUSTED_PROXY_HOPS;
+    delete process.env.TRUSTED_PROXY_HOPS;
+    try {
+      expect(getClientIpFromHeaders(headers({ 'x-forwarded-for': '203.0.113.50' }))).toBe('unknown');
+    } finally {
+      if (previous === undefined) delete process.env.TRUSTED_PROXY_HOPS;
+      else process.env.TRUSTED_PROXY_HOPS = previous;
+    }
+  });
+
+  it('fails closed when the trusted proxy count is zero or malformed', () => {
+    vi.stubEnv('TRUSTED_PROXY_HOPS', '0');
+    expect(getClientIpFromHeaders(headers({ 'x-forwarded-for': '203.0.113.50' }))).toBe('unknown');
+    vi.stubEnv('TRUSTED_PROXY_HOPS', 'not-a-number');
+    expect(getClientIpFromHeaders(headers({ 'x-forwarded-for': '203.0.113.50' }))).toBe('unknown');
+    vi.stubEnv('TRUSTED_PROXY_HOPS', '11');
+    expect(getClientIpFromHeaders(headers({ 'x-forwarded-for': '203.0.113.50' }))).toBe('unknown');
+  });
+
+  it('mengabaikan header edge khusus yang klien dapat memalsukan', () => {
+    trustOneProxy();
     const ip = getClientIpFromHeaders(
       headers({
         'x-vercel-forwarded-for': '198.51.100.9',
-        'x-forwarded-for': '1.2.3.4',
+        'cf-connecting-ip': '198.51.100.8',
+        'true-client-ip': '198.51.100.7',
+        'x-forwarded-for': '1.2.3.4, 203.0.113.50',
       })
     );
-    expect(ip).toBe('198.51.100.9');
+    expect(ip).toBe('203.0.113.50');
   });
 
   it('mengabaikan entri XFF paling kiri (spoofable oleh klien)', () => {
+    trustOneProxy();
     // Klien mengirim "1.2.3.4"; proxy tepercaya menambahkan IP sebenarnya di kanan.
     const ip = getClientIpFromHeaders(
       headers({ 'x-forwarded-for': '1.2.3.4, 203.0.113.50' })
@@ -64,15 +92,17 @@ describe('getClientIpFromHeaders', () => {
   });
 
   it('melewati entri XFF yang tidak valid', () => {
+    trustOneProxy();
     const ip = getClientIpFromHeaders(
       headers({ 'x-forwarded-for': 'not-an-ip, 203.0.113.50' })
     );
     expect(ip).toBe('203.0.113.50');
   });
 
-  it('fallback ke x-real-ip bila XFF tidak ada', () => {
+  it('mengabaikan x-real-ip yang tidak dapat dibuktikan berasal dari proxy', () => {
+    trustOneProxy();
     const ip = getClientIpFromHeaders(headers({ 'x-real-ip': '203.0.113.99' }));
-    expect(ip).toBe('203.0.113.99');
+    expect(ip).toBe('unknown');
   });
 
   it("mengembalikan 'unknown' bila tidak ada header IP", () => {
@@ -81,14 +111,20 @@ describe('getClientIpFromHeaders', () => {
   });
 
   it('mendukung object header biasa (NextAuth RequestInternal)', () => {
+    trustOneProxy();
     const ip = getClientIpFromHeaders({ 'x-forwarded-for': 'x, 203.0.113.77' });
     expect(ip).toBe('203.0.113.77');
   });
 });
 
 describe('getClientIp', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('membaca dari objek request', () => {
-    expect(getClientIp({ headers: headers({ 'x-real-ip': '198.51.100.1' }) })).toBe('198.51.100.1');
+    trustOneProxy();
+    expect(getClientIp({ headers: headers({ 'x-forwarded-for': '198.51.100.1' }) })).toBe('198.51.100.1');
     expect(getClientIp(undefined)).toBe('unknown');
   });
 });

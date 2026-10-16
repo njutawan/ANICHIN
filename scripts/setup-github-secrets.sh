@@ -17,6 +17,7 @@
 #   - GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
 #   - OAUTH_GITHUB_CLIENT_ID, OAUTH_GITHUB_CLIENT_SECRET (GitHub forbids secret names starting with GITHUB_)
 #   - TWO_FACTOR_ENCRYPTION_KEY
+#   - SMTP_HOST / SMTP_PORT / SMTP_SECURE / SMTP_USER / SMTP_PASS / SMTP_FROM
 #   - POSTGRES_PASSWORD (role migrasi/owner, hak DDL)
 #   - POSTGRES_APP_PASSWORD (role aplikasi DML-only — audit F-16)
 #   - DATABASE_URL (constructed from POSTGRES_PASSWORD)
@@ -101,13 +102,13 @@ echo ""
 
 NEXTAUTH_SECRET=$(openssl rand -base64 32)
 TWO_FACTOR_KEY=$(openssl rand -hex 32)  # wajib 64 hex char (AES-256-GCM, lihat src/lib/two-factor.ts)
-POSTGRES_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)
+POSTGRES_PASSWORD=$(openssl rand -hex 32)
 # F-16: password role aplikasi (DML saja) — BEDA dari role migrasi/owner.
 POSTGRES_APP_PASSWORD=$(openssl rand -hex 32)
 
 echo -e "${CHECK} NEXTAUTH_SECRET (44 chars): ${NEXTAUTH_SECRET:0:8}****"
 echo -e "${CHECK} TWO_FACTOR_ENCRYPTION_KEY (64 hex chars): ${TWO_FACTOR_KEY:0:8}****"
-echo -e "${CHECK} POSTGRES_PASSWORD (32 chars): ${POSTGRES_PASSWORD:0:8}****"
+echo -e "${CHECK} POSTGRES_PASSWORD (64 hex chars): ${POSTGRES_PASSWORD:0:8}****"
 echo -e "${CHECK} POSTGRES_APP_PASSWORD (64 hex chars): ${POSTGRES_APP_PASSWORD:0:8}****"
 
 # Save to backup file for reference
@@ -172,6 +173,34 @@ if [ ${#GITHUB_CLIENT_SECRET} -lt 32 ]; then
 fi
 if $VALID; then
     echo -e "${CHECK} All formats look valid"
+fi
+
+# ============================================================
+print_header "Step 3b: Collect required SMTP credentials"
+# ============================================================
+echo ""
+echo "SMTP is required for production email verification and password reset."
+read -p "  SMTP host (e.g., smtp.sendgrid.net): " SMTP_HOST
+read -p "  SMTP port [587]: " SMTP_PORT
+SMTP_PORT="${SMTP_PORT:-587}"
+read -p "  Implicit TLS on port 465? (true/false) [false]: " SMTP_SECURE
+SMTP_SECURE="${SMTP_SECURE:-false}"
+read -p "  SMTP username/API key: " SMTP_USER
+read -s -p "  SMTP password/API secret: " SMTP_PASS
+echo ""
+read -p "  From address [no-reply@$SITE_DOMAIN]: " SMTP_FROM
+SMTP_FROM="${SMTP_FROM:-no-reply@$SITE_DOMAIN}"
+if [ -z "$SMTP_HOST" ] || [ -z "$SMTP_USER" ] || [ ${#SMTP_PASS} -lt 16 ]; then
+    echo -e "${CROSS} SMTP host, username, and a password of at least 16 characters are required."
+    exit 1
+fi
+if [[ ! "$SMTP_PORT" =~ ^[0-9]{1,5}$ ]] || [ "$SMTP_PORT" -lt 1 ] || [ "$SMTP_PORT" -gt 65535 ]; then
+    echo -e "${CROSS} SMTP_PORT must be a number from 1 to 65535."
+    exit 1
+fi
+if [[ ! "$SMTP_SECURE" =~ ^(true|false)$ ]]; then
+    echo -e "${CROSS} SMTP_SECURE must be true or false."
+    exit 1
 fi
 
 # ============================================================
@@ -245,6 +274,14 @@ echo "    NEXTAUTH_SECRET             = ${NEXTAUTH_SECRET:0:8}****"
 echo "    NEXTAUTH_URL                = $NEXTAUTH_URL"
 echo "    TWO_FACTOR_ENCRYPTION_KEY   = ${TWO_FACTOR_KEY:0:8}****"
 echo ""
+echo "  Email verification (required):"
+echo "    SMTP_HOST                   = $SMTP_HOST"
+echo "    SMTP_PORT                   = $SMTP_PORT"
+echo "    SMTP_SECURE                 = $SMTP_SECURE"
+echo "    SMTP_USER                   = $SMTP_USER"
+echo "    SMTP_PASS                   = [set; value hidden]"
+echo "    SMTP_FROM                   = $SMTP_FROM"
+echo ""
 echo "  OAuth:"
 echo "    GOOGLE_CLIENT_ID            = ${GOOGLE_CLIENT_ID:0:30}..."
 echo "    GOOGLE_CLIENT_SECRET        = ${GOOGLE_CLIENT_SECRET:0:8}****"
@@ -280,7 +317,7 @@ set_secret() {
     local name=$1
     local value=$2
     printf "  Setting %-30s " "$name"
-    if echo -n "$value" | gh secret set "$name" 2>/dev/null; then
+    if printf '%s' "$value" | gh secret set "$name" 2>/dev/null; then
         echo -e "${CHECK} Set"
     else
         echo -e "${CROSS} Failed"
@@ -292,6 +329,14 @@ set_secret() {
 set_secret "NEXTAUTH_SECRET" "$NEXTAUTH_SECRET"
 set_secret "NEXTAUTH_URL" "$NEXTAUTH_URL"
 set_secret "TWO_FACTOR_ENCRYPTION_KEY" "$TWO_FACTOR_KEY"
+
+# SMTP (required for verified account registration and password reset)
+set_secret "SMTP_HOST" "$SMTP_HOST"
+set_secret "SMTP_PORT" "$SMTP_PORT"
+set_secret "SMTP_SECURE" "$SMTP_SECURE"
+set_secret "SMTP_USER" "$SMTP_USER"
+set_secret "SMTP_PASS" "$SMTP_PASS"
+set_secret "SMTP_FROM" "$SMTP_FROM"
 
 # OAuth
 set_secret "GOOGLE_CLIENT_ID" "$GOOGLE_CLIENT_ID"

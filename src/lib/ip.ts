@@ -14,16 +14,19 @@
  *   - meracuni audit log (IP hash palsu).
  *
  * STRATEGI:
- *   1. Pakai header yang ditulis oleh platform/edge dan tidak bisa dipalsukan
- *      dari luar: `x-vercel-forwarded-for`, `cf-connecting-ip`, `true-client-ip`.
- *   2. Fallback ke `x-forwarded-for`, tapi ambil entri dari arah KANAN
- *      sebanyak `TRUSTED_PROXY_HOPS` (default 1). Entri paling kanan adalah
- *      yang ditambahkan proxy tepercaya terdekat (Caddy/ALB/LB).
- *   3. `x-real-ip` sebagai fallback terakhir (Caddy mengisinya sendiri).
+ *   1. Percayai hanya X-Forwarded-For setelah reverse proxy yang dikonfigurasi
+ *      menimpanya/menambahkan alamat klien tepercaya. Ambil dari kanan sebanyak
+ *      `TRUSTED_PROXY_HOPS` (default 0); jangan pernah pakai header edge khusus
+ *      seperti `CF-Connecting-IP` atau `True-Client-IP` yang masih dapat dikirim
+ *      langsung oleh klien kecuali proxy di depannya memvalidasi dan menimpa.
+ *   2. Jika XFF tidak valid/tidak ada, kembalikan `unknown`; jangan fallback
+ *      ke `x-real-ip` karena klien dapat mengirim header itu sendiri.
  *
  * Env:
- *   TRUSTED_PROXY_HOPS — jumlah proxy tepercaya di depan app (default 1).
- *                        Vercel/Netlify/Cloudflare = 1, CDN + LB = 2.
+ *   TRUSTED_PROXY_HOPS — jumlah proxy tepercaya di depan app (default 0).
+ *                        XFF diabaikan kecuali angka ini dikonfigurasi eksplisit.
+ *                        Pastikan ingress menimpa XFF atau menambahkan alamat
+ *                        aktual di paling kanan; jangan hitung header klien.
  */
 
 const IPV4_RE = /^(?:\d{1,3}\.){3}\d{1,3}$/;
@@ -65,9 +68,11 @@ export function sanitizeIp(raw: string | null | undefined): string | null {
 }
 
 function trustedProxyHops(): number {
-  const parsed = Number.parseInt(process.env.TRUSTED_PROXY_HOPS ?? '1', 10);
-  if (!Number.isFinite(parsed) || parsed < 1) return 1;
-  return Math.min(parsed, 10);
+  const raw = process.env.TRUSTED_PROXY_HOPS;
+  if (raw == null || !/^\d+$/.test(raw.trim())) return 0;
+  const parsed = Number(raw.trim());
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 10) return 0;
+  return parsed;
 }
 
 /**
@@ -77,16 +82,11 @@ function trustedProxyHops(): number {
  * header berbagi satu bucket rate limit / satu hash audit).
  */
 export function getClientIpFromHeaders(headers: HeaderSource): string {
-  // 1. Header edge yang tidak bisa dipalsukan klien.
-  for (const headerName of ['x-vercel-forwarded-for', 'cf-connecting-ip', 'true-client-ip']) {
-    const value = readHeader(headers, headerName);
-    if (value) {
-      const ip = sanitizeIp(value.split(',')[0]);
-      if (ip) return ip;
-    }
-  }
+  // Fail closed: no explicit trusted-proxy configuration means no forwarded IP.
+  const hops = trustedProxyHops();
+  if (hops === 0) return 'unknown';
 
-  // 2. X-Forwarded-For — ambil dari kanan sebanyak jumlah proxy tepercaya.
+  // X-Forwarded-For — hanya aman bila ingress menimpa/menambahkan IP aktual.
   const xff = readHeader(headers, 'x-forwarded-for');
   if (xff) {
     const parts = xff
@@ -94,14 +94,10 @@ export function getClientIpFromHeaders(headers: HeaderSource): string {
       .map((part) => sanitizeIp(part))
       .filter((ip): ip is string => ip !== null);
     if (parts.length > 0) {
-      const index = Math.max(0, parts.length - trustedProxyHops());
+      const index = Math.max(0, parts.length - hops);
       return parts[index] ?? parts[parts.length - 1];
     }
   }
-
-  // 3. Fallback: x-real-ip (di-set oleh Caddy/Nginx dari koneksi TCP).
-  const realIp = sanitizeIp(readHeader(headers, 'x-real-ip'));
-  if (realIp) return realIp;
 
   return 'unknown';
 }

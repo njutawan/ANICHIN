@@ -27,6 +27,7 @@ import {
   isBackupCode,
 } from '@/lib/two-factor';
 import { consumeBackupCode } from '@/lib/two-factor-backup';
+import { validateAuthSecret } from '@/lib/production-env';
 
 /**
  * Auth optimization (Round 18 + Round 21):
@@ -214,6 +215,9 @@ function resolveSecret(): string {
   if (secret.length < 16) {
     throw new Error('NEXTAUTH_SECRET too short (min 16 chars).');
   }
+  if (process.env.NODE_ENV === 'production') {
+    validateAuthSecret(secret);
+  }
   return secret;
 }
 
@@ -300,6 +304,13 @@ function buildProviders() {
 
         const isValid = compareSync(password, user.password);
         if (!isValid) {
+          await recordFailedAttempt(email, ip);
+          return null;
+        }
+
+        // Passwords are not a proof of mailbox ownership. This also blocks
+        // legacy accounts that were created before verification was required.
+        if (!user.emailVerified) {
           await recordFailedAttempt(email, ip);
           return null;
         }
@@ -503,12 +514,18 @@ export const authOptions: NextAuthOptions = {
             return OAUTH_REDIRECT.usePasswordLogin;
           }
 
-          // Provider sudah membuktikan kepemilikan email → aman untuk menandai
-          // akun lokal (dibuat lewat password, belum verifikasi) sebagai verified.
+          // Provider membuktikan kepemilikan email. Jika akun lokal belum
+          // terverifikasi (termasuk akun legacy), jangan pertahankan password
+          // yang mungkin dipilih oleh orang yang lebih dulu mengklaim email itu:
+          // rotasi password acak yang tidak diketahui dan cabut seluruh sesi.
           if (!existing.emailVerified) {
             await db.user.update({
               where: { id: existing.id },
-              data: { emailVerified: new Date() },
+              data: {
+                emailVerified: new Date(),
+                password: hashSync(randomBytes(32).toString('hex'), 10),
+                sessionVersion: { increment: 1 },
+              },
             });
           }
           return true;
@@ -575,30 +592,39 @@ export const authOptions: NextAuthOptions = {
           role: string;
           name: string;
           sessionVersion: number;
+          emailVerified: Date | null;
         } | null = null;
 
         if (email) {
           try {
             identity = await db.user.findUnique({
               where: { email },
-              select: { id: true, role: true, name: true, sessionVersion: true },
+              select: { id: true, role: true, name: true, sessionVersion: true, emailVerified: true },
             });
           } catch (err) {
-            // Jangan gagalkan login karena satu query gagal: token tetap dibuat
-            // dari data kredensial, dan `sv` sengaja dibiarkan undefined supaya
-            // validasi ulang berikutnya (yang mencari `sessionVersion` di DB)
-            // yang menentukan.
+            // Fail closed: without a DB identity we cannot prove the account is
+            // still verified or that its current role/session version is valid.
             logger.error('[auth] gagal memuat identitas user saat login:', {
               error: err instanceof Error ? err.message : String(err),
             });
           }
         }
 
-        t.id = identity?.id ?? u.id;
-        t.role = (identity?.role as 'user' | 'admin' | undefined) ?? u.role;
-        t.name = identity?.name ?? u.name ?? t.name;
+        if (!identity?.emailVerified) {
+          t.id = undefined;
+          t.role = undefined;
+          t.name = null;
+          t.email = undefined;
+          t.sv = undefined;
+          t.svCheckedAt = Date.now();
+          return token;
+        }
+
+        t.id = identity.id;
+        t.role = identity.role as 'user' | 'admin';
+        t.name = identity.name ?? u.name ?? t.name;
         t.email = email ?? u.email ?? t.email;
-        t.sv = identity?.sessionVersion;
+        t.sv = identity.sessionVersion;
         t.svCheckedAt = Date.now();
         return token;
       }
@@ -617,13 +643,16 @@ export const authOptions: NextAuthOptions = {
           try {
             const fresh = await db.user.findUnique({
               where: { id: t.id },
-              select: { id: true, role: true, name: true, sessionVersion: true },
+              select: { id: true, role: true, name: true, sessionVersion: true, emailVerified: true },
             });
 
             // `t.sv === undefined` = token yang diterbitkan sebelum fitur ini ada
             // (atau saat DB sempat error) → adopsi nilai DB (trust on first use);
             // token berikutnya selalu punya penanda.
-            const revoked = !fresh || (t.sv !== undefined && fresh.sessionVersion !== t.sv);
+            const revoked =
+              !fresh ||
+              !fresh.emailVerified ||
+              (t.sv !== undefined && fresh.sessionVersion !== t.sv);
 
             if (revoked) {
               t.id = undefined;
@@ -674,9 +703,21 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
     async redirect({ url, baseUrl }) {
-      // Prevent open redirect — only allow same-origin redirects
-      if (url.startsWith(baseUrl)) return url;
-      if (url.startsWith('/')) return new URL(url, baseUrl).toString();
+      // Compare parsed origins, never string prefixes (`https://site.evil` must
+      // not pass for `https://site`). Protocol-relative URLs are external too.
+      try {
+        const base = new URL(baseUrl);
+        const destination = new URL(url, base);
+        if (
+          destination.origin === base.origin &&
+          !destination.username &&
+          !destination.password
+        ) {
+          return destination.toString();
+        }
+      } catch {
+        // Malformed URLs fall back to the canonical base.
+      }
       return baseUrl;
     },
   },

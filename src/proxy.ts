@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { getToken } from 'next-auth/jwt';
 import { tokenCookieParams } from '@/lib/auth-cookies';
+import { isCrossOriginMutation } from '@/lib/request-origin';
 
 /**
  * Security Headers Middleware
@@ -108,6 +109,15 @@ function localeForPath(pathname: string): 'id' | 'en' {
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // Reject cross-origin browser mutations centrally so custom API handlers
+  // cannot accidentally omit their CSRF/origin check. NextAuth's own CSRF
+  // token validation remains enabled as an additional layer.
+  if (pathname.startsWith('/api/') && isCrossOriginMutation(request)) {
+    const blocked = NextResponse.json({ error: 'Cross-origin request rejected.' }, { status: 403 });
+    applySecurityHeaders(blocked, generateNonce());
+    return blocked;
+  }
 
   // --- Admin route protection (auth + role check via JWT) ---
   // Middleware runs on Edge runtime — use getToken (JWT decode, no DB call)

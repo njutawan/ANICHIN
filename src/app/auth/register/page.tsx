@@ -2,7 +2,6 @@
 
 import { useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { signIn } from 'next-auth/react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Mail, Lock, User, ArrowRight, Eye, EyeOff, Loader2, Flame, Check } from 'lucide-react';
@@ -114,20 +113,10 @@ export default function RegisterPage() {
         return;
       }
 
-      // Respons server sengaja seragam untuk email baru & email yang sudah
-      // terdaftar (F-12), jadi keberhasilannya diketahui dari percobaan login:
-      // akun baru langsung bisa masuk. Kalau gagal, kemungkinan email itu sudah
-      // terdaftar dengan password lain — pesannya tidak mengonfirmasi apa pun.
-      const signInRes = await signIn('credentials', { email, password, redirect: false });
-      if (signInRes?.error) {
-        toast.error(
-          'Kalau email ini sudah terdaftar, masuk memakai password lamamu (atau pakai "Lupa password"). Cek juga kotak masuk email kamu.'
-        );
-        setLoading(false);
-        return;
-      }
-      toast.success('Daftar berhasil! Selamat datang.');
-      router.push('/');
+      // Tidak melakukan auto-login: seluruh akun password wajib membuktikan
+      // kepemilikan mailbox sebelum bisa membuat sesi.
+      toast.success('Jika pendaftaran diterima, link verifikasi dikirim ke email kamu.');
+      router.push('/auth/verify-email');
     } catch {
       toast.error('Gagal daftar. Coba lagi.');
     }
